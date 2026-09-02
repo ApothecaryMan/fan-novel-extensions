@@ -5,7 +5,7 @@ registerExtension({
   id: 'site:kolnovel',
   name: 'كول نوفيل',
   lang: 'ar',
-  version: '1.2.0',
+  version: '1.2.1',
   apiVersion: 1,
   baseUrl: 'https://kolnovel.com',
 
@@ -308,6 +308,10 @@ registerExtension({
     rawContent = rawContent.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
     rawContent = rawContent.replace(/<i[^>]*id="Top_ad_s"[^>]*>[\s\S]*?<\/i>/gi, '');
     rawContent = rawContent.replace(/<div[^>]*class="[^"]*ad[s]?[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '');
+    // Remove blockquote title headers (contain only the chapter title)
+    rawContent = rawContent.replace(/<blockquote[^>]*>[\s\S]*?<\/blockquote>/gi, '\n');
+    // Remove h2/h3/h4 heading tags
+    rawContent = rawContent.replace(/<h[1-4][^>]*>[\s\S]*?<\/h[1-4]>/gi, '\n');
 
     // Extract paragraphs
     var paragraphs = [];
@@ -318,6 +322,21 @@ registerExtension({
       if (!text) continue;
       // Skip footer markers
       if (/^(نهاية الفصل|تم الفصل|الفصل التالي|انتهى الفصل)/.test(text)) break;
+      // Remove URL leaks (sponsor/source links)
+      text = text.replace(/https?:\/\/\S+/g, '');
+      // Remove leading chapter-heading prefixes: "الفصل N[:T]", "[ الفصل N]", "الفصل الـ N",
+      // and Arabic-number words like "الفصل التاسع: ..."
+      text = text.replace(/^\[?\s*(الفصل|فصل)\s+(الـ)?\s*\d+(?:\s*[:|].*)?\s*\]?\s*/i, '')
+                 .replace(/^\s*\[\s*(الفصل|فصل)\s+(الـ)?\s*\d+\s*\]\s*/i, '')
+                 .replace(/^\[?\s*(الفصل|فصل)\s+(الأول|الثاني|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر)\s*[:|.]?\s*/i, '')
+                 .replace(/^\[?\s*(الفصل|فصل)\s+(?:[أ-ي]{3,}\s+(?:و\s+)?)+[أ-ي]{3,}\s*:\s*/i, '')
+                 .replace(/^\[?\s*(الفصل|فصل)\s+\S+:\s*/i, '');
+      // Remove numeric-only headers: "N - Title", "N.md", standalone "N"
+      text = text.replace(/^\d{1,6}\s*[-–:]\s*/, '')
+                 .replace(/^\d{1,6}\.?md\.?\s*/i, '')
+                 .replace(/^\d{1,6}$/, '');
+      text = text.trim();
+      if (!text) continue;
       paragraphs.push(text);
     }
 

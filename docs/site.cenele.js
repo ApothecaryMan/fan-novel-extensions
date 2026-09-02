@@ -6,7 +6,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.5.3',
+  version: '1.5.4',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -83,6 +83,34 @@ registerExtension({
       if (Object.prototype.hasOwnProperty.call(words, w) && core.indexOf(w) !== -1) return words[w];
     }
     return 1;
+  },
+
+  // Strip a leading chapter-prefix ("Chapter 1:", "الفصل 1:", "الفصل الثالث") from a
+  // chapter name so the number/word is not duplicated in the final title.
+  _stripChapterPrefix: function (name) {
+    var m = (name || '').trim();
+    m = m.replace(/^(?:chapter|ch\.?|فصل|الفصل)\s*(\d+(?:\.\d+)?)\s*(?:[-–—:.#|]\s*)?/i, '');
+    if (m !== (name || '').trim()) return m.trim();
+    m = m.replace(/^(?:فصل|الفصل)\s*(?:الأول|الثاني|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر)\s*(?:[:|.\-–—]?\s*)/i, '');
+    m = m.replace(/^(?:فصل|الفصل)\s*[:|.\-–—]\s*/i, '');
+    return m.trim();
+  },
+
+  // Build the final "Chapter <number> <name>" title; auto-generate missing numbers.
+  _finalizeChapters: function (list) {
+    var sorted = list.slice().sort(function (a, b) { return (a.number || 0) - (b.number || 0); });
+    var seen = {};
+    var out = [];
+    sorted.forEach(function (ch, i) {
+      if (seen[ch.url]) return;
+      seen[ch.url] = true;
+      var num = ch.number || i + 1;
+      var cleanName = this._stripChapterPrefix(ch.title);
+      ch.number = num;
+      ch.title = 'Chapter ' + num + (cleanName ? ' ' + cleanName : '');
+      out.push(ch);
+    }, this);
+    return out;
   },
 
   _parseDate: function (raw) {
@@ -202,7 +230,7 @@ registerExtension({
       chapters.push({
         url: linkMatch[1].trim(),
         number: chapterNumber,
-        title: rawTitle,
+        title: this._stripChapterPrefix(rawTitle),
         uploadedAt: uploadedAt
       });
     }
@@ -282,7 +310,7 @@ registerExtension({
     // Fallback: parse whatever chapter rows shipped in the page (usually the last 8).
     var fallbackChapters = this._parseChapterRows(html);
     var props = this._nhvProps(html);
-    if (!props) return fallbackChapters;
+    if (!props) return this._finalizeChapters(fallbackChapters);
 
     var nonce = props.chaptersNonce;
     var nonceRefreshed = false;
@@ -317,7 +345,7 @@ registerExtension({
       break;
     }
 
-    if (!page1Res || !page1Res.html) return fallbackChapters;
+    if (!page1Res || !page1Res.html) return this._finalizeChapters(fallbackChapters);
 
     var collected = [page1Res.html];
     var totalChapters = parseInt(page1Res.total, 10) || 0;
@@ -365,18 +393,9 @@ registerExtension({
       });
     }).bind(this));
 
-    if (allChapters.length === 0) return fallbackChapters;
+    if (allChapters.length === 0) return this._finalizeChapters(fallbackChapters);
 
-    allChapters.sort(function (a, b) { return a.number - b.number; });
-    var seen = {};
-    var unique = [];
-    allChapters.forEach(function (ch) {
-      var key = ch.url;
-      if (seen[key]) return;
-      seen[key] = true;
-      unique.push(ch);
-    });
-    return unique;
+    return this._finalizeChapters(allChapters);
   },
 
   // ---------------------------------------------------------------
@@ -403,6 +422,11 @@ registerExtension({
       var text = this._decodeEntities(this._stripTags(pMatch[1]));
       if (!text) continue;
       if (/^(نهاية الفصل|تم الفصل|الفصل التالي|انتهى الفصل)/.test(text)) break;
+      // Prevent duplicating the chapter title/heading at the top of the content.
+      text = this._stripChapterPrefix(text)
+        .replace(/^\[?\s*(الفصل|فصل)\s+(:|-)\s*/i, '')
+        .trim();
+      if (!text) continue;
       paragraphs.push(text);
     }
 

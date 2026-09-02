@@ -8,7 +8,7 @@ registerExtension({
   id: 'site:novelfull',
   name: 'NovelFull',
   lang: 'en',
-  version: '1.1.0',
+  version: '1.1.1',
   apiVersion: 1,
   baseUrl: 'https://novelfull.com',
 
@@ -50,6 +50,34 @@ registerExtension({
       }
       return String.fromCharCode(cp);
     });
+  },
+
+  // Strip a leading chapter-prefix ("Chapter 1:", "الفصل 1:", "الفصل الثالث") from a
+  // chapter name so the number/word is not duplicated in the final title.
+  _stripChapterPrefix: function (name) {
+    var m = (name || '').trim();
+    m = m.replace(/^(?:chapter|ch\.?|فصل|الفصل)\s*(\d+(?:\.\d+)?)\s*(?:[-–—:.#|]\s*)?/i, '');
+    if (m !== (name || '').trim()) return m.trim();
+    m = m.replace(/^(?:فصل|الفصل)\s*(?:الأول|الثاني|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر)\s*(?:[:|.\-–—]?\s*)/i, '');
+    m = m.replace(/^(?:فصل|الفصل)\s*[:|.\-–—]\s*/i, '');
+    return m.trim();
+  },
+
+  // Build the final "Chapter <number> <name>" title; auto-generate missing numbers.
+  _finalizeChapters: function (list) {
+    var sorted = list.slice().sort(function (a, b) { return (a.number || 0) - (b.number || 0); });
+    var seen = {};
+    var out = [];
+    sorted.forEach(function (ch, i) {
+      if (seen[ch.url]) return;
+      seen[ch.url] = true;
+      var num = ch.number || i + 1;
+      var cleanName = this._stripChapterPrefix(ch.title);
+      ch.number = num;
+      ch.title = 'Chapter ' + num + (cleanName ? ' ' + cleanName : '');
+      out.push(ch);
+    }, this);
+    return out;
   },
 
   _parseDate: function (raw) {
@@ -146,16 +174,8 @@ registerExtension({
       chapters = chapters.concat(pageChaps);
     }
 
-    // Dedupe by URL, then sort ascending by chapter number.
-    var seen = {};
-    var unique = [];
-    chapters.forEach(function (ch) {
-      if (seen[ch.url]) return;
-      seen[ch.url] = true;
-      unique.push(ch);
-    });
-    unique.sort(function (a, b) { return (a.number || 0) - (b.number || 0); });
-    return unique;
+    chapters = this._finalizeChapters(chapters);
+    return chapters;
   },
 
   _fetch: async function (url, ctx) {
@@ -188,8 +208,7 @@ registerExtension({
       var numParsed = rawTitle.match(/(?:^|\b)chapter\s*[:.#\-–—]?\s*(\d+)/i) || rawTitle.match(/(\d+)\s*[:.\-–—]/);
       var chapterNumber = numParsed ? parseInt(numParsed[1], 10) : 0;
 
-      var title = rawTitle.replace(/^chapter\s*[\d.:\-–—\s]+/i, '').trim();
-      if (chapterNumber) title = chapterNumber + (title ? ' ' + title : '');
+      var title = this._stripChapterPrefix(rawTitle);
 
       chapters.push({ url: this._absUrl(href), number: chapterNumber, title: title });
     }

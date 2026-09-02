@@ -5,7 +5,7 @@ registerExtension({
   id: 'site:kolnovel',
   name: 'كول نوفيل',
   lang: 'ar',
-  version: '1.2.2',
+  version: '1.2.3',
   apiVersion: 1,
   baseUrl: 'https://kolnovel.com',
 
@@ -82,6 +82,34 @@ registerExtension({
       if (Object.prototype.hasOwnProperty.call(words, w) && core.indexOf(w) !== -1) return words[w];
     }
     return 1;
+  },
+
+  // Strip a leading chapter-prefix ("Chapter 1:", "الفصل 1:", "الفصل الثالث") from a
+  // chapter name so the number/word is not duplicated in the final title.
+  _stripChapterPrefix: function (name) {
+    var m = (name || '').trim();
+    m = m.replace(/^(?:chapter|ch\.?|فصل|الفصل)\s*(\d+(?:\.\d+)?)\s*(?:[-–—:.#|]\s*)?/i, '');
+    if (m !== (name || '').trim()) return m.trim();
+    m = m.replace(/^(?:فصل|الفصل)\s*(?:الأول|الثاني|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر)\s*(?:[:|.\-–—]?\s*)/i, '');
+    m = m.replace(/^(?:فصل|الفصل)\s*[:|.\-–—]\s*/i, '');
+    return m.trim();
+  },
+
+  // Build the final "Chapter <number> <name>" title; auto-generate missing numbers.
+  _finalizeChapters: function (list) {
+    var sorted = list.slice().sort(function (a, b) { return (a.number || 0) - (b.number || 0); });
+    var seen = {};
+    var out = [];
+    sorted.forEach(function (ch, i) {
+      if (seen[ch.url]) return;
+      seen[ch.url] = true;
+      var num = ch.number || i + 1;
+      var cleanName = this._stripChapterPrefix(ch.title);
+      ch.number = num;
+      ch.title = 'Chapter ' + num + (cleanName ? ' ' + cleanName : '');
+      out.push(ch);
+    }, this);
+    return out;
   },
 
   _parseDate: function (raw) {
@@ -274,7 +302,7 @@ registerExtension({
       chapters.push({
         url: chapterUrl,
         number: chapterNumber,
-        title: title,
+        title: this._stripChapterPrefix(title),
         uploadedAt: uploadedAt
       });
     }
@@ -291,8 +319,7 @@ registerExtension({
       }
     }
 
-    chapters.sort(function (a, b) { return a.number - b.number; });
-    return chapters;
+    return this._finalizeChapters(chapters);
   },
 
   // ---------------------------------------------------------------

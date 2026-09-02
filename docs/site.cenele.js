@@ -6,7 +6,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.5.2',
+  version: '1.5.3',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -253,9 +253,6 @@ registerExtension({
       summary = this._decodeEntities(this._stripTags(block)).replace(/[\s{]+$/g, '');
     }
 
-    var previewChapters = this._parseChapterRows(html);
-    var totalChapters = previewChapters.length > 0 ? previewChapters.length : undefined;
-
     return {
       source: this.id,
       url: fullUrl,
@@ -264,7 +261,11 @@ registerExtension({
       coverUrl: coverUrl,
       summary: summary,
       status: status,
-      totalChapters: totalChapters,
+      // The novel page only renders the last ~8 chapters inline; reporting that
+      // lazy preview count as `totalChapters` makes the app show "8 chapters"
+      // for every novel. Leave it undefined so the caller falls back to the real
+      // full list returned by parseChapterList.
+      totalChapters: undefined,
       category: 'روايات مترجمة'
     };
   },

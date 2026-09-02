@@ -40,7 +40,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.6.2',
+  version: '1.6.3',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 

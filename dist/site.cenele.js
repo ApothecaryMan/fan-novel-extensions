@@ -40,7 +40,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.6.1',
+  version: '1.6.2',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -485,14 +485,20 @@ registerExtension({
       // Drop "المترجم : ..." / "ترجمة ..." credit lines.
       text = text.replace(/^\s*(المترجم|مترجم|الترجمة|ترجمة)\s*[:|]?\s*[^\n]*$/i, '').trim();
       if (!text) continue;
-      // Drop the chapter-title header block entirely ("الفصل 663: لا، دانييل",
-      // "Chapter 1: Name") so the name is not repeated beneath the title.
-      // Otherwise just strip a leading prefix for blocks that begin with one.
-      if (/^(?:chapter|ch\.?|فصل|الفصل)\s*\d+(?:\s*[:—|.-]|\s+)[^\n]*$/i.test(text)) {
-        continue;
-      }
-      text = text.replace(/^\[?\s*(?:chapter|ch\.?|فصل|الفصل)\s*\d+(?:\s*[:—|.-]\s*|\s+)/i, '')
-        .trim();
+      // Handle a leading chapter-heading line ("الفصل 663: لا، دانييل", "Chapter 1: Name",
+      // "الفصل 59"). We NO LONGER drop such a block entirely: the chapter title shown by the
+      // app may be just "الفصل 59" when the site's list lacked a name, in which case the name
+      // here is the ONLY copy and must be preserved. So strip the "الفصل N"/"Chapter N" prefix
+      // and keep whatever name follows. Already-prefixed headings become empty and are skipped.
+      text = text.replace(/^\s*(?:chapter|ch\.?)\s*\d+(?:\s*[:.—|-]\s*|\s+|$)/i, '').trim();
+      text = text.replace(/^\s*(?:فصل|الفصل)\s*\d+(?:\s*[:.—|-]\s*|\s+|$)/i, '').trim();
+      // Arabic word-number headings (اول..عاشر, 11-19, 20-90 و ...) + optional name.
+      // NOTE: 11-19 composites (الثاني عشر/الثالث عشر...) MUST be handled before the
+      // standalone ones (الثالث) or the tens "عشر" gets left as junk.
+      text = text.replace(/^\s*(?:فصل|الفصل)\s+(?:الحادي|الثانية?|الثانية?)?\s*عشر(?:اء)?\s*[:.—|-]?\s*/i, '').trim();
+      text = text.replace(/^\s*(?:فصل|الفصل)\s+(?:الأول|الثاني|الثالث|الرابع|الخامس)\s+عشر\s*[:.—|-]?\s*/i, '').trim();
+      text = text.replace(/^\s*(?:فصل|الفصل)\s+(?:الأول|الثاني|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر)\s*[:.—|-]?\s*/i, '').trim();
+      text = text.replace(/^\s*(?:فصل|الفصل)\s+(?:عشرون|ثلاثون|أربعون|خمسون|ستون|سبعون|ثمانون|تسعون)\s*[:.—|-]?\s*/i, '').trim();
       if (!text) continue;
       paragraphs.push(text);
     }

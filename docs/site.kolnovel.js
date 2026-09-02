@@ -5,7 +5,7 @@ registerExtension({
   id: 'site:kolnovel',
   name: 'كول نوفيل',
   lang: 'ar',
-  version: '1.3.0',
+  version: '1.4.0',
   apiVersion: 1,
   baseUrl: 'https://kolnovel.com',
 
@@ -118,11 +118,21 @@ registerExtension({
   // and failures are never cached; only ok GET responses are stored.
   _novelCache: { ttl: 5 * 60 * 1000, cap: 8, map: Object.create(null) },
 
+  // Wrap network calls so a genuine exception (not an HTTP status) becomes a clear
+  // Error instead of an unhandled rejection (bug #9).
+  _safeFetch: async function (urlOrOpts, ctx, label) {
+    try {
+      return await ctx.xFetch(urlOrOpts);
+    } catch (e) {
+      throw new Error((label || 'فشل الاتصال') + ': ' + (e && e.message ? e.message : String(e)));
+    }
+  },
+
   _fetchNovelHtml: async function (url, ctx) {
     var cache = this._novelCache;
     var hit = cache.map[url];
     if (hit && (Date.now() - hit.t) < cache.ttl) return hit.html;
-    var res = await ctx.xFetch(url);
+    var res = await this._safeFetch(url, ctx, 'فشل جلب صفحة الرواية');
     if (!res.ok) throw new Error('فشل جلب صفحة الرواية: ' + res.status);
     var html = res.text;
     cache.map[url] = { t: Date.now(), html: html };
@@ -292,12 +302,19 @@ registerExtension({
       var chapterUrl = linkMatch[1].trim();
       // Chapter number from div.epl-num (e.g. "الفصل 1451: كلمة ختامية").
       // Prefer the number that follows "الفصل" so a volume number is not
-      // mistaken for the chapter number.
+      // mistaken for the chapter number (bug #4: the old optional-group regex
+      // matched the very first digit, e.g. the volume in "المجلد 2 - الفصل 45").
       var numberMatch = block.match(/<div[^>]*class="[^"]*epl-num[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
       var rawNum = numberMatch ? this._stripTags(numberMatch[1]) : '';
       var cleanNum = this._toLatinDigits(rawNum);
-      var numParsed = cleanNum.match(/(?:الفصل\s*)?(\d+)/i);
-      var chapterNumber = numParsed ? parseInt(numParsed[1], 10) : 0;
+      var chapterNumber = 0;
+      var afterFasl = cleanNum.match(/(?:الفصل|فصل|chapter)\s*(\d+(?:\.\d+)?)/i);
+      if (afterFasl) {
+        chapterNumber = parseFloat(afterFasl[1]);
+      } else {
+        var anyNum = cleanNum.match(/\d+(?:\.\d+)?/);
+        if (anyNum) chapterNumber = parseFloat(anyNum[0]);
+      }
 
       // Chapter title from div.epl-title
       var titleMatch = block.match(/<div[^>]*class="[^"]*epl-title[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
@@ -310,7 +327,9 @@ registerExtension({
         var titleNum = cleanTitle.match(/^(\d+)/);
         if (titleNum) {
           chapterNumber = parseInt(titleNum[1], 10);
-          title = title.replace(/^[\s\u200E\u200F\u202A-\u202E]*\d+\s*/, '').trim();
+          // Strip the leading number from the ORIGINAL title too (bug #5). The original may
+          // use Arabic-Indic digits (٤٥) which ASCII \d misses, so cover 0-9 + ٠-٩ + ۰-۹.
+          title = title.replace(/^[\s\u200E\u200F\u202A-\u202E]*[0-9\u0660-\u0669\u06F0-\u06F9]+[\s\u200E\u200F\u202A-\u202E]*/, '').trim();
         }
       }
 
@@ -346,23 +365,70 @@ registerExtension({
   // ---------------------------------------------------------------
   // Chapter body
   // ---------------------------------------------------------------
+  // Depth-aware block extraction: capture the body of the block whose opening tag matches
+  // `opener` (e.g. the <div ... id="kol_content"> container) by counting nested same-tag
+  // depth. Inner nested divs no longer truncate the capture (bug #2 - previously the
+  // non-greedy `</div><div` regex stopped at the first inner </div>).
+  _extractBlockContent: function (html, opener) {
+    var openerRe = new RegExp(opener, 'i');
+    var openMatch = openerRe.exec(html);
+    if (!openMatch) return null;
+    var openRe = /<div(?=[\s>])/gi;
+    var closeRe = /<\/div\s*>/gi;
+    var start = openMatch.index + openMatch[0].length;
+    openRe.lastIndex = start;
+    closeRe.lastIndex = start;
+    var depth = 1;
+    while (depth > 0) {
+      var o = openRe.exec(html);
+      var c = closeRe.exec(html);
+      var oi = o ? o.index : Infinity;
+      var ci = c ? c.index : Infinity;
+      if (oi === Infinity && ci === Infinity) return null; // unbalanced
+      if (oi < ci) {
+        depth++;
+        openRe.lastIndex = o.index + o[0].length;
+        closeRe.lastIndex = openRe.lastIndex;
+      } else {
+        depth--;
+        if (depth === 0) return { content: html.slice(start, c.index) };
+        closeRe.lastIndex = c.index + c[0].length;
+        openRe.lastIndex = closeRe.lastIndex;
+      }
+    }
+    return null;
+  },
+
   parseChapterContent: async function (chapterUrl, ctx) {
-    var res = await ctx.xFetch(this._absUrl(chapterUrl));
+    var absUrl = this._absUrl(chapterUrl);
+    var res = await this._safeFetch(absUrl, ctx, 'فشل جلب نص الفصل');
     if (!res.ok) throw new Error('فشل جلب نص الفصل: ' + res.status);
     var html = res.text;
 
-    // Content is in #kol_content.entry-content
-    var contentMatch = html.match(/<div[^>]*id="kol_content"[^>]*>([\s\S]*?)<\/div>\s*<div/i) ||
-                       html.match(/<div[^>]*class="[^"]*entry-content[^"]*"[^>]*id="kol_content"[^>]*>([\s\S]*?)<\/div>/i) ||
-                       html.match(/<div[^>]*id="kol_content"[^>]*class="[^"]*entry-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
-    if (!contentMatch) throw new Error('تعذر العثور على نص الفصل');
+    // Locate #kol_content then capture its full depth-matched body (bug #2: inner nested divs
+    // no longer truncate the captured chapter text).
+    var contentBlock = this._extractBlockContent(html, '<div[^>]*id="kol_content"[^>]*>') ||
+                       this._extractBlockContent(html, '<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>');
+    if (!contentBlock) throw new Error('تعذر العثور على نص الفصل');
+    var rawContent = contentBlock.content;
 
-    var rawContent = contentMatch[1];
-    // Remove scripts, styles, ads, and hidden elements
+    // Remove scripts, styles, known ad slots, and hidden elements.
     rawContent = rawContent.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
     rawContent = rawContent.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
     rawContent = rawContent.replace(/<i[^>]*id="Top_ad_s"[^>]*>[\s\S]*?<\/i>/gi, '');
-    rawContent = rawContent.replace(/<div[^>]*class="[^"]*ad[s]?[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '');
+    // Remove ad blocks by class, but only when "ad" is a whole token (word-boundary) in the
+    // class/value, NOT a sub-string (fixes #1 over-broad match that deleted real content in
+    // classes like shadow/reader/gradient/badge). This removes class="ad", "inline-ad",
+    // "ad-banner", etc., while preserving any block that merely contains "ad" inside a word.
+    rawContent = rawContent.replace(/<div[^>]*class="[^"]*\bad\b[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '');
+    // Keep a copy of blockquotes so the no-<p> fallback can still read them (fixes #3).
+    var blockquotes = [];
+    var bqGrab = /<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi;
+    var bqM;
+    while ((bqM = bqGrab.exec(rawContent)) !== null) {
+      var bqText = this._decodeEntities(this._stripTags(bqM[1]));
+      if (bqText) blockquotes.push(bqText);
+    }
     // Remove blockquote title headers (contain only the chapter title)
     rawContent = rawContent.replace(/<blockquote[^>]*>[\s\S]*?<\/blockquote>/gi, '\n');
     // Remove h2/h3/h4 heading tags
@@ -377,12 +443,17 @@ registerExtension({
       if (!text) continue;
       // Skip footer markers
       if (/^(نهاية الفصل|تم الفصل|الفصل التالي|انتهى الفصل)/.test(text)) break;
-      // Remove URL leaks (sponsor/source links)
-      text = text.replace(/https?:\/\/\S+/g, '');
+      // Remove URL leaks (sponsor/source links) and collapse any doubled whitespace left
+      // behind (fixes #10).
+      text = text.replace(/https?:\/\/\S+/g, ' ').replace(/[ \t\u00A0]{2,}/g, ' ');
       // Remove leading chapter-heading prefixes: "الفصل N[:T]", "[ الفصل N]", "الفصل الـ N",
       // and Arabic-number words like "الفصل التاسع: ..."
       text = text.replace(/^\[?\s*(الفصل|فصل)\s+(الـ)?\s*\d+(?:\s*[:|].*)?\s*\]?\s*/i, '')
                  .replace(/^\s*\[\s*(الفصل|فصل)\s+(الـ)?\s*\d+\s*\]\s*/i, '')
+                 // Composite Arabic tens (11-19) must be stripped BEFORE the standalone
+                 // word-numbers below, or "الثالث" in "الثالث عشر" gets consumed alone.
+                 .replace(/^\[?\s*(الفصل|فصل)\s+(?:الحادي|الثاني)?\s*عشر(?:اء)?\s*[:|\-–—.]?\s*/i, '')
+                 .replace(/^\[?\s*(الفصل|فصل)\s+(?:الأول|الثاني|الثالث|الرابع|الخامس)\s+عشر\s*[:|\-–—.]?\s*/i, '')
                  .replace(/^\[?\s*(الفصل|فصل)\s+(الأول|الثاني|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر)\s*[:|.]?\s*/i, '')
                  .replace(/^\[?\s*(الفصل|فصل)\s+(?:[أ-ي]{3,}\s+(?:و\s+)?)+[أ-ي]{3,}\s*:\s*/i, '')
                  .replace(/^\[?\s*(الفصل|فصل)\s+\S+:\s*/i, '');
@@ -395,19 +466,15 @@ registerExtension({
       paragraphs.push(text);
     }
 
-    // Fallback: if no paragraphs found, try extracting from blockquotes
-    if (paragraphs.length === 0) {
-      var bqRegex = /<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi;
-      var bqMatch;
-      while ((bqMatch = bqRegex.exec(rawContent)) !== null) {
-        var bqText = this._decodeEntities(this._stripTags(bqMatch[1]));
-        if (bqText) paragraphs.push(bqText);
-      }
+    // Fallback: if no <p> elements were found, fall back to the blockquotes we saved before
+    // stripping them (fixes #3 - the old code searched after removal, so it could never match).
+    if (paragraphs.length === 0 && blockquotes.length > 0) {
+      paragraphs = blockquotes;
     }
 
     // Final fallback: strip all tags
     if (paragraphs.length === 0) {
-      return this._decodeEntities(rawContent.replace(/<[^>]+>/g, '\n').replace(/\s+\n/g, '\n').trim());
+      return this._decodeEntities(rawContent.replace(/<[^>]+>/g, '\n').replace(/[ \t]{2,}/g, ' ').replace(/\s+\n/g, '\n').trim());
     }
     return paragraphs.join('\n\n');
   },
@@ -425,7 +492,7 @@ registerExtension({
       url = this._absUrl('/?s=' + encodeURIComponent(query.trim()) + (pageNum > 1 ? '&paged=' + pageNum : ''));
     }
 
-    var res = await ctx.xFetch(url);
+    var res = await this._safeFetch(url, ctx, 'فشل البحث');
     if (!res.ok) return [];
     var html = res.text;
     var results = [];

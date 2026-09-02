@@ -5,7 +5,7 @@ registerExtension({
   id: 'site:kolnovel',
   name: 'كول نوفيل',
   lang: 'ar',
-  version: '1.2.3',
+  version: '1.2.4',
   apiVersion: 1,
   baseUrl: 'https://kolnovel.com',
 
@@ -106,7 +106,7 @@ registerExtension({
       var num = ch.number || i + 1;
       var cleanName = this._stripChapterPrefix(ch.title);
       ch.number = num;
-      ch.title = 'Chapter ' + num + (cleanName ? ' ' + cleanName : '');
+      ch.title = 'الفصل ' + num + (cleanName ? ' ' + cleanName : '');
       out.push(ch);
     }, this);
     return out;

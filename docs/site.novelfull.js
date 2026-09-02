@@ -8,7 +8,7 @@ registerExtension({
   id: 'site:novelfull',
   name: 'NovelFull',
   lang: 'en',
-  version: '1.1.2',
+  version: '1.2.0',
   apiVersion: 1,
   baseUrl: 'https://novelfull.com',
 
@@ -106,9 +106,7 @@ registerExtension({
   // ---------------------------------------------------------------
   parseNovelInfo: async function (url, ctx) {
     var fullUrl = this._absUrl(url);
-    var res = await ctx.xFetch(fullUrl);
-    if (!res.ok) throw new Error('Failed to fetch novel: ' + res.status);
-    var html = res.text;
+    var html = await this._fetchCached(fullUrl, ctx);
 
     var title = (html.match(/<h3[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)<\/h3>/i) || [])[1];
     if (!title) title = (html.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i) || [])[1];
@@ -162,7 +160,7 @@ registerExtension({
     // Normalize: strip trailing '?page=N' and base path so we can re-append page.
     var base = fullUrl.split('?')[0].replace(/\/$/, '');
 
-    var html = await this._fetch(base, ctx);
+    var html = await this._fetchCached(base, ctx);
     var pages = this._totalPages(html);
 
     var chapters = this._parseChapterPage(html);
@@ -196,6 +194,30 @@ registerExtension({
     var res = await ctx.xFetch(url);
     if (!res.ok) throw new Error('Failed to fetch: ' + res.status);
     return res.text;
+  },
+
+  // Tiny shared LRU cache for the (heavy, static) novel page, so parseNovelInfo and
+  // parseChapterList don't each fetch the same HTML when the app calls them back to
+  // back for one novel. Bounded and time-limited so the data can't go stale. Every
+  // page share differs by URL so only the repeated novel URL is deduped.
+  _novelCache: { ttl: 5 * 60 * 1000, cap: 8, map: Object.create(null) },
+
+  _fetchCached: async function (url, ctx) {
+    var cache = this._novelCache;
+    var key = url.replace(/\/$/, '') || url;
+    var hit = cache.map[key];
+    if (hit && (Date.now() - hit.t) < cache.ttl) return hit.html;
+    var html = await this._fetch(url, ctx);
+    cache.map[key] = { t: Date.now(), html: html };
+    var keys = Object.keys(cache.map);
+    if (keys.length > cache.cap) {
+      var oldest = keys[0];
+      for (var i = 1; i < keys.length; i++) {
+        if (cache.map[keys[i]].t < cache.map[oldest].t) oldest = keys[i];
+      }
+      delete cache.map[oldest];
+    }
+    return html;
   },
 
   _totalPages: function (html) {

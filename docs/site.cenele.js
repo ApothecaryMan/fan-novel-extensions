@@ -6,7 +6,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.5.9',
+  version: '1.6.0',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -114,6 +114,32 @@ registerExtension({
       out.push(ch);
     }, this);
     return out;
+  },
+
+  // Tiny shared LRU cache for the (heavy, static) novel page, so parseNovelInfo and
+  // parseChapterList don't each fetch the same HTML when the app calls them back to
+  // back for one novel. Bounded and time-limited so the data can't go stale. Misses
+  // and failures are never cached; only ok GET responses are stored.
+  _novelCache: { ttl: 5 * 60 * 1000, cap: 8, map: Object.create(null) },
+
+  _fetchNovelHtml: async function (url, ctx) {
+    var cache = this._novelCache;
+    var hit = cache.map[url];
+    if (hit && (Date.now() - hit.t) < cache.ttl) return hit.html;
+    var res = await ctx.xFetch(url);
+    if (!res.ok) throw new Error('فشل جلب صفحة الرواية: ' + res.status);
+    var html = res.text;
+    cache.map[url] = { t: Date.now(), html: html };
+    var keys = Object.keys(cache.map);
+    // Evict oldest beyond cap (simple O(n) is fine at cap=8).
+    if (keys.length > cache.cap) {
+      var oldest = keys[0];
+      for (var i = 1; i < keys.length; i++) {
+        if (cache.map[keys[i]].t < cache.map[oldest].t) oldest = keys[i];
+      }
+      delete cache.map[oldest];
+    }
+    return html;
   },
 
   _parseDate: function (raw) {
@@ -245,9 +271,7 @@ registerExtension({
   // ---------------------------------------------------------------
   parseNovelInfo: async function (url, ctx) {
     var fullUrl = this._absUrl(url);
-    var res = await ctx.xFetch(fullUrl);
-    if (!res.ok) throw new Error('فشل جلب تفاصيل الرواية: ' + res.status);
-    var html = res.text;
+    var html = await this._fetchNovelHtml(fullUrl, ctx);
 
     var titleMatch = html.match(/<h1[^>]*>([^<]+)<\/h1>/i) || html.match(/<title>([^–\-&#<]+)/i);
     var title = titleMatch ? this._stripTags(titleMatch[1]).replace(/فضاء الروايات/g, '').trim() : 'رواية';
@@ -306,9 +330,7 @@ registerExtension({
   // ---------------------------------------------------------------
   parseChapterList: async function (novelUrl, ctx) {
     var fullUrl = this._absUrl(novelUrl);
-    var res = await ctx.xFetch(fullUrl);
-    if (!res.ok) throw new Error('فشل جلب قائمة الفصول: ' + res.status);
-    var html = res.text;
+    var html = await this._fetchNovelHtml(fullUrl, ctx);
 
     // Fallback: parse whatever chapter rows shipped in the page (usually the last 8).
     var fallbackChapters = this._parseChapterRows(html);

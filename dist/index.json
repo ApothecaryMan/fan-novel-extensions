@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1788360938852,
+  "generatedAt": 1788366141478,
   "extensions": [
     {
       "id": "site:cenele",
@@ -25,5 +25,5 @@
       "baseUrl": "https://kolnovel.com"
     }
   ],
-  "signature": "unsigned-dev"
+  "signature": "YXjRsmvtQddh-UTx8mQZWlXE0DhQ_AzQpy7ml_z_xDlTjCYpEXs1vpo7eFz_ToTVBeGFzIZuXuSxLk2F-tTnDg"
 }

@@ -6,7 +6,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.5.0',
+  version: '1.5.1',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -54,7 +54,7 @@ registerExtension({
     return String(str)
       .replace(/[\u0660-\u0669]/g, function (d) { return String(d.charCodeAt(0) - 0x660); })
       .replace(/[\u06F0-\u06F9]/g, function (d) { return String(d.charCodeAt(0) - 0x6F0); })
-      .replace(/[\u066C\u066D]/g, '');
+      .replace(/[\u066C\u066D\u060C,]/g, '');
   },
 
   _relativeUnitMs: function (str) {
@@ -91,6 +91,14 @@ registerExtension({
     if (!str) return undefined;
 
     var now = Date.now();
+    var sixDaysMs = 6 * 24 * 3600 * 1000;
+    function _fmtIfOld(ts) {
+      if (ts && (now - ts) > sixDaysMs) {
+        var d = new Date(ts);
+        return ('0' + d.getDate()).slice(-2) + '/' + ('0' + (d.getMonth() + 1)).slice(-2) + '/' + String(d.getFullYear()).slice(-2);
+      }
+      return ts;
+    }
 
     // 1. Relative Arabic patterns — supports both "منذ N وحدة" and "N وحدة منذ",
     // Latin digits, Arabic digit words, and dual forms (يومين / ساعتين / …).
@@ -98,7 +106,7 @@ registerExtension({
       var relMs = this._relativeUnitMs(str);
       if (relMs !== undefined) {
         var amount = this._relativeAmount(str);
-        return now - relMs * amount;
+        return _fmtIfOld(now - relMs * amount);
       }
     }
 
@@ -128,19 +136,19 @@ registerExtension({
           if (day > 1000) { var tmp = day; day = year; year = tmp; }
           if (year < 100) year += 2000;
           var dateObj = new Date(year, monthIdx, day, 12, 0, 0);
-          if (!isNaN(dateObj.getTime())) return dateObj.getTime();
+          if (!isNaN(dateObj.getTime())) return _fmtIfOld(dateObj.getTime());
         } else if (nums && nums.length === 1) {
           var dayOnly = parseInt(nums[0], 10);
           var curYear = new Date().getFullYear();
           var dObj = new Date(curYear, monthIdx, dayOnly, 12, 0, 0);
-          if (!isNaN(dObj.getTime())) return dObj.getTime();
+          if (!isNaN(dObj.getTime())) return _fmtIfOld(dObj.getTime());
         }
       }
     }
 
     // 3. Standard date parse fallback
     var parsed = Date.parse(str);
-    if (!isNaN(parsed)) return parsed;
+    if (!isNaN(parsed)) return _fmtIfOld(parsed);
 
     return undefined;
   },
@@ -180,8 +188,14 @@ registerExtension({
       var linkMatch = block.match(/<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
       if (!linkMatch) continue;
       var rawTitle = this._stripTags(linkMatch[2]);
-      var numMatch = rawTitle.match(/(?:الفصل\s*|Chapter\s*)?(\d+)/i);
-      var chapterNumber = numMatch ? parseInt(numMatch[1], 10) : 0;
+      var cleanTitle = this._toLatinDigits(rawTitle);
+
+      var numMatch = cleanTitle.match(/(?:الفصل|فصل|Chapter|Ch\.?)\s*(\d+(?:\.\d+)?)/i);
+      var chapterNumber = numMatch ? parseFloat(numMatch[1]) : 0;
+      if (!chapterNumber) {
+        var numFallback = cleanTitle.match(/(\d+(?:\.\d+)?)/);
+        chapterNumber = numFallback ? parseFloat(numFallback[1]) : 0;
+      }
 
       var dateMatch = block.match(/<span[^>]*class="[^"]*chapter-release-date[^"]*"[^>]*>([\s\S]*?)<\/span>/i) ||
                       block.match(/<i>([\s\S]*?)<\/i>/i);
@@ -242,6 +256,9 @@ registerExtension({
       summary = this._decodeEntities(this._stripTags(block)).replace(/[\s{]+$/g, '');
     }
 
+    var previewChapters = this._parseChapterRows(html);
+    var totalChapters = previewChapters.length > 0 ? previewChapters.length : undefined;
+
     return {
       source: this.id,
       url: fullUrl,
@@ -250,6 +267,7 @@ registerExtension({
       coverUrl: coverUrl,
       summary: summary,
       status: status,
+      totalChapters: totalChapters,
       category: 'روايات مترجمة'
     };
   },
@@ -264,102 +282,97 @@ registerExtension({
     var html = res.text;
 
     // Fallback: parse whatever chapter rows shipped in the page (usually the last 8).
-    var chapters = this._parseChapterRows(html);
+    var fallbackChapters = this._parseChapterRows(html);
     var props = this._nhvProps(html);
-    if (!props) return chapters;
+    if (!props) return fallbackChapters;
 
     var nonce = props.chaptersNonce;
-    var meta = null;
-    var metaRes = await this._ajaxPost(props.ajaxUrl, {
-action: 'nhv_manga_single_chapters_page',
+    var nonceRefreshed = false;
+    var sleep = function (ms) { return new Promise(function (res) { setTimeout(res, ms); }); };
+
+    // Fetch page 1 with volume: '-1' (covers all volumes seamlessly and provides exact total)
+    var page1Res = null;
+    for (var attempt = 0; attempt < 5; attempt++) {
+      var r = await this._ajaxPost(props.ajaxUrl, {
+        action: 'nhv_manga_single_chapters_page',
         nonce: nonce,
         manga_id: props.postId,
         volume: '-1',
         page: '1',
         per_page: '100',
-        meta_only: '1',
         order: 'asc'
-    }, ctx);
-    if (metaRes.status === 403) {
-      var ref = await this._ajaxPost(props.ajaxUrl, { action: 'nhv_refresh_front_nonces' }, ctx);
-      var refJ = JSON.parse(ref.text || '{}');
-      if (refJ.data && refJ.data.chapters_nonce) nonce = refJ.data.chapters_nonce;
-      metaRes = await this._ajaxPost(props.ajaxUrl, {
-        action: 'nhv_manga_single_chapters_page', nonce: nonce, manga_id: props.postId,
-        volume: '-1', page: '1', per_page: '100', meta_only: '1', order: 'asc'
       }, ctx);
-    }
-    try { meta = JSON.parse(metaRes.text || '{}'); } catch (e) { meta = {}; }
-    var volumes = (meta && meta.volumes) || [];
-
-    var jobs = [];
-    volumes.forEach(function (vol) {
-      var count = parseInt(vol.count, 10) || 0;
-      // This Madara fork returns ~100 rows per page regardless of the per_page
-      // request value, so pages must be ceil(count/100) — using per_page here
-      // under-fetches and leaves the list truncated on device.
-      var pages = count > 0 ? Math.ceil(count / 100) : 1;
-      for (var p = 1; p <= pages; p++) {
-        jobs.push({ volume: String(vol.num), page: p });
+      if (r.status === 403 && !nonceRefreshed) {
+        var ref = await this._ajaxPost(props.ajaxUrl, { action: 'nhv_refresh_front_nonces' }, ctx);
+        var refJ = JSON.parse(ref.text || '{}');
+        if (refJ.data && refJ.data.chapters_nonce) {
+          nonce = refJ.data.chapters_nonce;
+          nonceRefreshed = true;
+        }
+        continue;
       }
-    });
+      if (r.status === 403 || r.status === 429 || r.status === 503 || !r.ok) {
+        await sleep(700 * (attempt + 1));
+        continue;
+      }
+      page1Res = JSON.parse(r.text || '{}');
+      break;
+    }
 
-    // Sequential crawl, 1 page at a time. This Madara fork rate-limits parallel
-    // bursts (Cloudflare throttle), which on-device caused every page to 403 and
-    // the list to degrade to only the server-rendered fallback rows (~8). One
-    // page at a time with per-page retry + backoff is slow but reliable, and
-    // stays well under Cloudflare's threshold.
-    var collected = [];
-    var nonceRefreshed = false;
-    var sleep = function (ms) { return new Promise(function (res) { setTimeout(res, ms); }); };
-    for (var i = 0; i < jobs.length; i++) {
-      var job = jobs[i];
+    if (!page1Res || !page1Res.html) return fallbackChapters;
+
+    var collected = [page1Res.html];
+    var totalChapters = parseInt(page1Res.total, 10) || 0;
+    var perPage = parseInt(page1Res.per_page, 10) || 100;
+    var totalPages = totalChapters > 0 ? Math.ceil(totalChapters / perPage) : (page1Res.has_more ? 2 : 1);
+
+    for (var p = 2; p <= totalPages; p++) {
       var pageJson = null;
       for (var attemptNum = 0; attemptNum < 5; attemptNum++) {
-        var r = await this._ajaxPost(props.ajaxUrl, {
+        var pr = await this._ajaxPost(props.ajaxUrl, {
           action: 'nhv_manga_single_chapters_page',
           nonce: nonce,
           manga_id: props.postId,
-          volume: job.volume,
-          page: String(job.page),
+          volume: '-1',
+          page: String(p),
           per_page: '100',
           order: 'asc'
         }, ctx);
-        if (r.status === 403 && !nonceRefreshed) {
-          var ref = await this._ajaxPost(props.ajaxUrl, { action: 'nhv_refresh_front_nonces' }, ctx);
-          var refJ = JSON.parse(ref.text || '{}');
-          if (refJ.data && refJ.data.chapters_nonce) {
-            nonce = refJ.data.chapters_nonce;
+        if (pr.status === 403 && !nonceRefreshed) {
+          var ref2 = await this._ajaxPost(props.ajaxUrl, { action: 'nhv_refresh_front_nonces' }, ctx);
+          var refJ2 = JSON.parse(ref2.text || '{}');
+          if (refJ2.data && refJ2.data.chapters_nonce) {
+            nonce = refJ2.data.chapters_nonce;
             nonceRefreshed = true;
           }
-          continue; // retry this page with the fresh nonce
-        }
-        if (r.status === 403 || r.status === 429 || r.status === 503 || !r.ok) {
-          await sleep(700 * (attemptNum + 1)); // backoff: 700, 1400, 2100, 2800ms
           continue;
         }
-        pageJson = JSON.parse(r.text || '{}');
+        if (pr.status === 403 || pr.status === 429 || pr.status === 503 || !pr.ok) {
+          await sleep(700 * (attemptNum + 1));
+          continue;
+        }
+        pageJson = JSON.parse(pr.text || '{}');
         break;
       }
-      if (pageJson && pageJson.html) collected.push(pageJson.html);
-      await sleep(120); // gentle pacing between pages
+      if (pageJson && pageJson.html) {
+        collected.push(pageJson.html);
+      }
+      await sleep(100);
     }
 
+    var allChapters = [];
     collected.forEach((function (pageHtml) {
       this._parseChapterRows(pageHtml).forEach(function (ch) {
-        chapters.push({
-          url: ch.url,
-          number: ch.number,
-          title: ch.title,
-          uploadedAt: ch.uploadedAt
-        });
+        allChapters.push(ch);
       });
     }).bind(this));
 
-    chapters.sort(function (a, b) { return a.number - b.number; });
+    if (allChapters.length === 0) return fallbackChapters;
+
+    allChapters.sort(function (a, b) { return a.number - b.number; });
     var seen = {};
     var unique = [];
-    chapters.forEach(function (ch) {
+    allChapters.forEach(function (ch) {
       var key = ch.url;
       if (seen[key]) return;
       seen[key] = true;
@@ -435,8 +448,9 @@ action: 'nhv_manga_single_chapters_page',
 
       var chip = (cardBlock.match(/class="[^"]*nhv-library-card__chip[^"]*"[^>]*>([\s\S]*?)<\/span>/i) || ['', ''])[1];
       chip = this._stripTags(chip);
-      var chapMatch = this._toLatinDigits(chip).match(/([\d\u0660-\u0669\u06F0-\u06F9]+)\s*فصل/i);
-      var totalChapters = chapMatch ? parseInt(this._toLatinDigits(chapMatch[1]), 10) : 0;
+      var cleanChip = this._toLatinDigits(chip);
+      var chapMatch = cleanChip.match(/(\d+)\s*فصل/i);
+      var totalChapters = chapMatch ? parseInt(chapMatch[1], 10) : 0;
 
       var excerptMatch = cardBlock.match(/<p class="nhv-library-card__excerpt">([^<]+)<\/p>/i);
       var summary = excerptMatch ? this._decodeEntities(excerptMatch[1].trim()) : '';

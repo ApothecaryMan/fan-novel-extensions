@@ -1,12 +1,14 @@
 // site:novelfull — remote-JS extension for novelfull.com (English).
 // Clean sandboxed scraper adhering to the Extension Runtime Specification (ctx.xFetch).
-// Chapter lists are inline on the novel page (no AJAX pagination needed).
+// Verified against live novelfull.com markup:
+//   novel page  : /<slug>.html  (metadata + paginated chapter list)
+//   chapter URL : /<slug>/chapter-<N>-<subtitle>.html
 // Chapter titles are reported in "N title…" style, e.g. "1244 time undojfijijf".
 registerExtension({
   id: 'site:novelfull',
   name: 'NovelFull',
   lang: 'en',
-  version: '1.0.0',
+  version: '1.1.0',
   apiVersion: 1,
   baseUrl: 'https://novelfull.com',
 
@@ -28,7 +30,7 @@ registerExtension({
     var named = {
       amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
       hellip: '…', ndash: '–', mdash: '—', lsquo: '\u2018', rsquo: '\u2019',
-      ldquo: '\u201C', rdquo: '\u201D', middot: '·', bull: '•', aacute: 'á'
+      ldquo: '\u201C', rdquo: '\u201D', middot: '·', bull: '•'
     };
     return str.replace(/&([a-zA-Z][a-zA-Z0-9]*|#[xX]?[0-9a-fA-F]+);/g, function (m, name) {
       var low = name.toLowerCase();
@@ -56,36 +58,16 @@ registerExtension({
     if (!s) return undefined;
     var now = Date.now();
 
-    // Relative / friendly English dates
     if (/^\d+\s*(sec|secs|second|seconds)/.test(s)) return now;
-    if (/^\d+\s*(min|mins|minute|minutes)\s*(ago)?/.test(s)) {
-      var m = s.match(/^(\d+)/);
-      return now - parseInt(m[1], 10) * 60 * 1000;
-    }
-    if (/^\d+\s*(hour|hours|hr|hrs)\s*(ago)?/.test(s)) {
-      var h = s.match(/^(\d+)/);
-      return now - parseInt(h[1], 10) * 3600 * 1000;
-    }
-    if (/^\d+\s*(day|days)\s*(ago)?/.test(s)) {
-      var d = s.match(/^(\d+)/);
-      return now - parseInt(d[1], 10) * 24 * 3600 * 1000;
-    }
-    if (/^\d+\s*(week|weeks)\s*(ago)?/.test(s)) {
-      var w = s.match(/^(\d+)/);
-      return now - parseInt(w[1], 10) * 7 * 24 * 3600 * 1000;
-    }
-    if (/^\d+\s*(month|months)\s*(ago)?/.test(s)) {
-      var mo = s.match(/^(\d+)/);
-      return now - parseInt(mo[1], 10) * 30 * 24 * 3600 * 1000;
-    }
-    if (/^\d+\s*(year|years)\s*(ago)?/.test(s)) {
-      var y = s.match(/^(\d+)/);
-      return now - parseInt(y[1], 10) * 365 * 24 * 3600 * 1000;
-    }
+    if (/^\d+\s*(min|mins|minute|minutes)(\s+ago)?/.test(s)) return now - parseInt(s.match(/(\d+)/)[1], 10) * 60 * 1000;
+    if (/^\d+\s*(hour|hours|hr|hrs)(\s+ago)?/.test(s)) return now - parseInt(s.match(/(\d+)/)[1], 10) * 3600 * 1000;
+    if (/^\d+\s*(day|days)(\s+ago)?/.test(s)) return now - parseInt(s.match(/(\d+)/)[1], 10) * 24 * 3600 * 1000;
+    if (/^\d+\s*(week|weeks)(\s+ago)?/.test(s)) return now - parseInt(s.match(/(\d+)/)[1], 10) * 7 * 24 * 3600 * 1000;
+    if (/^\d+\s*(month|months)(\s+ago)?/.test(s)) return now - parseInt(s.match(/(\d+)/)[1], 10) * 30 * 24 * 3600 * 1000;
+    if (/^\d+\s*(year|years)(\s+ago)?/.test(s)) return now - parseInt(s.match(/(\d+)/)[1], 10) * 365 * 24 * 3600 * 1000;
     if (s.indexOf('yesterday') !== -1) return now - 24 * 3600 * 1000;
     if (s.indexOf('today') !== -1) return now;
 
-    // Absolute English dates: "January 5, 2024" or "2024-01-05"
     var parsed = Date.parse(s);
     if (!isNaN(parsed)) return parsed;
     return undefined;
@@ -100,31 +82,36 @@ registerExtension({
     if (!res.ok) throw new Error('Failed to fetch novel: ' + res.status);
     var html = res.text;
 
-    var title = (html.match(/<h1[^>]*[^>]*>([^<]+)<\/h1>/i) || [])[1];
-    var mTitle = html.match(/<h3[^>]*class="[^"]*name[^"]*"[^>]*>([^<]+)<\/h3>/i) || html.match(/<h1[^>]*>([^<]+)<\/h1>/i);
-    title = mTitle ? this._decodeEntities(this._stripTags(mTitle[1])) : (title ? this._decodeEntities(this._stripTags(title)) : undefined);
+    var title = (html.match(/<h3[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)<\/h3>/i) || [])[1];
+    if (!title) title = (html.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i) || [])[1];
+    if (!title) title = (html.match(/<title>([^<]+)<\/title>/i) || [])[1];
+    if (title) title = this._decodeEntities(this._stripTags(title)).replace(/\s*(\|Novelfull|- Novelfull)/i, '').trim();
 
-    var coverMatch = html.match(/<div[^>]*class="[^"]*book[^"]*"[^>]*>[\s\S]*?<img[^>]+src="([^">]+)"/i) ||
-                     html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i) ||
-                     html.match(/<img[^>]+class="[^"]*cover[^"]*"[^>]+src="([^">]+)"/i);
+    var coverMatch = html.match(/<div[^>]*class="[^"]*info-holder[^"]*"[^>]*>[\s\S]*?<div class="book">[\s\S]*?<img[^>]+src="([^">]+)"/i) ||
+                     html.match(/<img[^>]+class="[^"]*cover[^"]*"[^>]+src="([^">]+)"/i) ||
+                     html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i);
     var coverUrl = coverMatch ? coverMatch[1].trim() : undefined;
+    if (coverUrl && coverUrl.charAt(0) === '/') coverUrl = this._absUrl(coverUrl);
 
-    var author = '';
-    var authorMatch = html.match(/href="[^"]*\/author\/[^"]*"[^>]*>([^<]+)<\/a>/i);
-    if (authorMatch) author = this._decodeEntities(this._stripTags(authorMatch[1]));
+    // info meta rows: "<div><h3>Field:</h3>value</div>"
+    function metaRow(field) {
+      var re = new RegExp('<div>\\s*<h3>' + field + ':</h3>([\\s\\S]*?)</div>', 'i');
+      var m = html.match(re);
+      return m ? m[1] : '';
+    }
+
+    var author = this._decodeEntities(this._stripTags(metaRow('Author')));
+    var category = this._decodeEntities(this._stripTags(metaRow('Genre')));
 
     var status = 'مستمرة';
-    if (/complete/i.test(html) && !/ongoing/i.test(html)) status = 'مكتملة';
+    var statusRaw = this._decodeEntities(this._stripTags(metaRow('Status')));
+    if (/complete/i.test(statusRaw)) status = 'مكتملة';
 
     var summary = '';
-    var sumMatch = html.match(/<div[^>]*class="[^"]*desc-text[^"]*"[^>]*>([\s\S]*?)<\/div>/i) ||
-                   html.match(/<div[^>]*class="[^"]*summary-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i) ||
-                   html.match(/<div[^>]*class="[^"]*desc[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
-    if (sumMatch) {
-      summary = this._decodeEntities(this._stripTags(sumMatch[1])
-        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ''));
-    }
+    var sumMatch = html.match(/<div[^>]*class="[^"]*desc-text[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+    if (sumMatch) summary = this._decodeEntities(this._stripTags(sumMatch[1]));
+
+    var rating = parseFloat((html.match(/<span>(\d+(?:\.\d+)?)<\/span>/) || [])[1]);
 
     return {
       source: this.id,
@@ -134,62 +121,78 @@ registerExtension({
       coverUrl: coverUrl,
       summary: summary || undefined,
       status: status,
-      category: 'Translated Novels',
+      category: ['Translated', category].filter(Boolean).join(' ') || 'Translated Novels',
+      rating: isNaN(rating) ? undefined : rating
     };
   },
 
   // ---------------------------------------------------------------
-  // Chapter list — inline on the novel page
+  // Chapter list — full list is paginated (/<slug>.html?page=N)
   // ---------------------------------------------------------------
   parseChapterList: async function (novelUrl, ctx) {
     var fullUrl = this._absUrl(novelUrl);
-    var res = await ctx.xFetch(fullUrl);
-    if (!res.ok) throw new Error('Failed to fetch chapter list: ' + res.status);
-    var html = res.text;
+    // Normalize: strip trailing '?page=N' and base path so we can re-append page.
+    var base = fullUrl.split('?')[0].replace(/\/$/, '');
 
+    var html = await this._fetch(base, ctx);
+    var pages = this._totalPages(html);
+
+    var chapters = this._parseChapterPage(html);
+
+    for (var p = 2; p <= pages; p++) {
+      var pageHtml = await this._fetch(base + '?page=' + p, ctx);
+      var pageChaps = this._parseChapterPage(pageHtml);
+      if (pageChaps.length === 0) break;
+      chapters = chapters.concat(pageChaps);
+    }
+
+    // Dedupe by URL, then sort ascending by chapter number.
+    var seen = {};
+    var unique = [];
+    chapters.forEach(function (ch) {
+      if (seen[ch.url]) return;
+      seen[ch.url] = true;
+      unique.push(ch);
+    });
+    unique.sort(function (a, b) { return (a.number || 0) - (b.number || 0); });
+    return unique;
+  },
+
+  _fetch: async function (url, ctx) {
+    var res = await ctx.xFetch(url);
+    if (!res.ok) throw new Error('Failed to fetch: ' + res.status);
+    return res.text;
+  },
+
+  _totalPages: function (html) {
+    var input = html.match(/<input[^>]*id="total-page"[^>]*value="(\d+)"/i);
+    if (input) return parseInt(input[1], 10);
+    var last = html.match(/class="last"[^>]*>[\s\S]*?href="[^"]*\?page=(\d+)"/i) ||
+               html.match(/<a[^>]+href="[^"]*\?page=(\d+)"[^>]*>\s*Last\s*<\/a>/i);
+    if (last) return parseInt(last[1], 10);
+    return 1;
+  },
+
+  _parseChapterPage: function (html) {
     var chapters = [];
-    var anchorRegex = /<a[^>]+href="([^"]+)">[\s\S]*?<span[^>]*class="[^"]*chapter-text[^"]*"[^>]*>([\s\S]*?)<\/span>/gi;
+    // Only the full paginated list: <ul class="list-chapter"> ... <li><a href=".."><span class="chapter-text">Chapter N: T</span></a></li>
+    var listStart = html.indexOf('id="list-chapter"');
+    var region = listStart !== -1 ? html.slice(listStart) : html;
+    var itemRegex = /<a[^>]+href="([^"]+)"[^>]*>[\s\S]*?<span[^>]*class="[^"]*chapter-text[^"]*"[^>]*>([\s\S]*?)<\/span>/gi;
     var match;
-    while ((match = anchorRegex.exec(html)) !== null) {
+    while ((match = itemRegex.exec(region)) !== null) {
       var href = match[1].trim();
+      if (href.indexOf('chapter-') === -1 && !/chapter/i.test(href)) continue;
       var rawTitle = this._decodeEntities(this._stripTags(match[2]));
 
-      // Chapter number from leading "Chapter N" / "N"
-      var numParsed = rawTitle.match(/\bchapter\s*(\d+)\b/i);
+      var numParsed = rawTitle.match(/(?:^|\b)chapter\s*[:.#\-–—]?\s*(\d+)/i) || rawTitle.match(/(\d+)\s*[:.\-–—]/);
       var chapterNumber = numParsed ? parseInt(numParsed[1], 10) : 0;
-      if (!chapterNumber) {
-        var leadNum = rawTitle.match(/^(\d+)/);
-        chapterNumber = leadNum ? parseInt(leadNum[1], 10) : 0;
-      }
 
-      // Title in "N title…" style: strip the "Chapter N:" prefix and put the
-      // number at the front, e.g. "Chapter 1244: time" -> "1244 time".
-      var title = rawTitle.replace(/^chapter\s*\d+\s*[:.\-–—]?\s*/i, '').trim();
+      var title = rawTitle.replace(/^chapter\s*[\d.:\-–—\s]+/i, '').trim();
       if (chapterNumber) title = chapterNumber + (title ? ' ' + title : '');
 
-      chapters.push({
-        url: href,
-        number: chapterNumber,
-        title: title
-      });
+      chapters.push({ url: this._absUrl(href), number: chapterNumber, title: title });
     }
-
-    // Fallback: anchors whose text carries the chapter number without .chapter-text
-    if (chapters.length === 0) {
-      var rowRegex = /<div[^>]*class="[^"]*row[^"]*"[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-      var rm;
-      while ((rm = rowRegex.exec(html)) !== null) {
-        if (rm[1].indexOf('http') !== 0 && rm[1].indexOf('/') !== 0) continue;
-        var rTitle = this._decodeEntities(this._stripTags(rm[2])).replace(/\s+/g, ' ').trim();
-        if (/chapter\s*\d+/i.test(rTitle)) {
-          var rNum = rTitle.match(/chapter\s*(\d+)/i);
-          var num = rNum ? parseInt(rNum[1], 10) : 0;
-          var subtitle = rTitle.replace(/^chapter\s*\d+\s*[:.\-–—]?\s*/i, '').trim();
-          chapters.push({ url: rm[1].trim(), number: num, title: num + (subtitle ? ' ' + subtitle : '') });
-        }
-      }
-    }
-
     return chapters;
   },
 
@@ -201,9 +204,10 @@ registerExtension({
     if (!res.ok) throw new Error('Failed to fetch chapter: ' + res.status);
     var html = res.text;
 
-    var panelMatch = html.match(/<div[^>]*id="chapter-content"[^>]*>([\s\S]*?)<\/div>/i) ||
-                     html.match(/<div[^>]*class="[^"]*channel-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i) ||
-                     html.match(/<div[^>]*class="[^"]*content[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+    var panelMatch = html.match(/<div[^>]*id="chapter-content"[^>]*>([\s\S]*?)(?=<hr class="chapter-end"|<div class="chapter-nav|<a[^>]*id="(?:next_chap|prev_chap)")/i);
+    if (!panelMatch) {
+      panelMatch = html.match(/<div[^>]*class="[^"]*chapter-c[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+    }
     if (!panelMatch) throw new Error('Chapter content not found');
 
     var raw = panelMatch[1];
@@ -213,15 +217,16 @@ registerExtension({
     raw = raw.replace(/<aside[^>]*>[\s\S]*?<\/aside>/gi, '');
     raw = raw.replace(/<ins[^>]*>[\s\S]*?<\/ins>/gi, '');
     raw = raw.replace(/<iframe[^>]*>[\s\S]*?<\/iframe>/gi, '');
-    raw = raw.replace(/<div[^>]*class="[^"]*(?:ads\d*|adsbygoogle|advert|container-ads|inlinead)[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '');
-    raw = raw.replace(/<div[^>]*class="[^"]*(?:ads\d*|adsbygoogle|advert|container-ads|inlinead)[^"]*"\s*\/>/gi, '');
+    raw = raw.replace(/<div[^>]*class="[^"]*(?:ads\d*|adsbygoogle|advert|container-ads|inlinead|ads-area)[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '');
 
+    // Strip the inline "Chapter N: Title" heading that repeats inside content.
     var paragraphs = [];
-    var pRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi;
+    var pRegex = /<(?:p|h3|h4)[^>]*>([\s\S]*?)<\/(?:p|h3|h4)>/gi;
     var pm;
     while ((pm = pRegex.exec(raw)) !== null) {
       var text = this._decodeEntities(this._stripTags(pm[1]));
       if (!text) continue;
+      if (paragraphs.length === 0 && /^chapter\s*\d+\b/i.test(text) && !/^\d+\s*$/i.test(text)) continue;
       if (/^(the end\b|end of the chapter|next chapter|you are reading)/i.test(text)) break;
       paragraphs.push(text);
     }
@@ -233,72 +238,73 @@ registerExtension({
   },
 
   // ---------------------------------------------------------------
-  // Search / browse
+  // Search / browse (shared row markup)
   // ---------------------------------------------------------------
-  searchNovels: async function (query, page, ctx) {
-    var isBrowse = !query || !query.trim();
-    var pageNum = (page && page > 1) ? Math.floor(page) : 1;
-    var url;
-    if (isBrowse) {
-      url = pageNum > 1 ? this._absUrl('/page/' + pageNum) : this._absUrl('/genre/novel');
-    } else {
-      url = this._absUrl('/search?keyword=' + encodeURIComponent(query.trim()));
-    }
-
-    var res = await ctx.xFetch(url);
-    if (!res.ok) return [];
-    var html = res.text;
+  _parseNovelRows: function (html) {
     var results = [];
+    // each novel card is a <div class="row"> block; slice each to the next one
+    var parts = [];
+    var re = /<div class="row">/g;
+    var m;
+    while ((m = re.exec(html)) !== null) {
+      var end = html.indexOf('<div class="row">', m.index + 15);
+      parts.push(end === -1 ? html.slice(m.index) : html.slice(m.index, end));
+    }
+    if (parts.length === 0) {
+      var aRe = /<h3[^>]*class="[^"]*truyen-title[^"]*"[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>([^<]*)<\/a>/gi;
+      var am;
+      while ((am = aRe.exec(html)) !== null) {
+        parts.push(am[0]);
+      }
+    }
+    return this._buildRows(parts);
+  },
 
-    var cardRegex = /<div[^>]*class="[^"]*col-novel[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/gi;
-    var cm;
-    while ((cm = cardRegex.exec(html)) !== null) {
-      var card = cm[1];
-      var link = (card.match(/<h3[^>]*class="[^"]*title[^"]*"[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/i) ||
-                  card.match(/<(?:div|h3|h2)[^>]*class="[^"]*(novel-title|title)[^"]*"[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/i));
+  _buildRows: function (cards) {
+    var results = [];
+    for (var r = 0; r < cards.length; r++) {
+      var card = cards[r];
+      var link = card.match(/<h3[^>]*class="[^"]*truyen-title[^"]*"[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>([^<]*)<\/a>/i);
       if (!link) continue;
-      var novelUrl = link[1] || link[2];
-      var title = this._decodeEntities(this._stripTags(link[2] || link[3] || ''));
+      var novelUrl = this._absUrl(link[1].trim());
+      var title = this._decodeEntities(this._stripTags(link[2]));
       if (!title) continue;
 
-      var cov = (card.match(/<img[^>]+src="([^">]+)"/i) || [])[1];
-      var author = (card.match(/href="[^"]*\/author\/[^"]*"[^>]*>([^<]+)<\/a>/i) || [])[1] || 'Unknown';
+      var cov = (card.match(/<img[^>]+class="[^"]*cover[^"]*"[^>]+src="([^">]+)"/i) || ['', ''])[1];
+      var authorMatch = (card.match(/class="[^"]*author[^"]*"[^>]*>[\s\S]*?glyphicon[^"]*"[^>]*>[\s\S]*?<\/span>([\s\S]*?)<\/span>/i) || ['', ''])[1];
+      var author = authorMatch ? this._decodeEntities(this._stripTags(authorMatch)) : '';
+      var statusStatus = card.match(/href="[^"]*\/status\/([^"]+)"/i);
+      var statusRaw = statusStatus ? statusStatus[1] : '';
+
       results.push({
         source: this.id,
         url: novelUrl,
         title: title,
-        coverUrl: cov ? cov.trim() : undefined,
-        author: this._decodeEntities(this._stripTags(author)),
-        category: 'Translated Novels'
+        coverUrl: cov ? this._absUrl(cov.trim()) : undefined,
+        author: author || 'Unknown',
+        category: 'Translated Novels',
+        status: (statusRaw && /complete/i.test(statusRaw)) ? 'مكتملة' : 'مستمرة'
       });
     }
-
-    // Fallback: search results item markup
-    if (results.length === 0) {
-      var itemRegex = /<div[^>]*class="[^"]*search-item[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
-      var im;
-      while ((im = itemRegex.exec(html)) !== null) {
-        var item = im[1];
-        var iLink = (item.match(/<a[^>]+href="([^"]+)"[^>]*>\s*([^<]+)\s*<\/a>/) || [])[1];
-        var iTitle = (item.match(/<h3[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/i) ||
-                      item.match(/<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/i));
-        if (!iTitle) continue;
-        results.push({
-          source: this.id,
-          url: iTitle[1].trim(),
-          title: this._decodeEntities(this._stripTags(iTitle[2])),
-          coverUrl: (item.match(/<img[^>]+src="([^">]+)"/i) || [])[1] || undefined,
-          author: 'Unknown',
-          category: 'Translated Novels'
-        });
-      }
-    }
-
     return results;
   },
 
+  searchNovels: async function (query, page, ctx) {
+    var isBrowse = !query || !query.trim();
+    var url;
+    if (isBrowse) {
+      url = this._absUrl('/most-popular');
+    } else {
+      url = this._absUrl('/search?keyword=' + encodeURIComponent(query.trim()));
+    }
+    var res = await ctx.xFetch(url);
+    if (!res.ok) return [];
+    return this._parseNovelRows(res.text);
+  },
+
   getPopularNovels: async function (page, ctx) {
-    var pageNum = (page && page > 1) ? Math.floor(page) : 1;
-    return this.searchNovels('', pageNum, ctx);
+    var res = await ctx.xFetch(this._absUrl('/most-popular'));
+    if (!res.ok) return [];
+    return this._parseNovelRows(res.text);
   }
 });

@@ -6,7 +6,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.5.7',
+  version: '1.5.8',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -86,14 +86,17 @@ registerExtension({
   },
 
   // Strip a leading chapter-prefix ("Chapter 1:", "الفصل 1:", "الفصل الثالث") from a
-  // chapter name so the number/word is not duplicated in the final title.
+  // chapter name so the number/word is not duplicated in the final title, and drop any
+  // quote marks that cenele wraps chapter names in ("..."/«...»).
   _stripChapterPrefix: function (name) {
-    var m = (name || '').trim();
+    var raw = (name || '').trim();
+    var m = raw;
+    m = m.replace(/^["«“']+|["»”']+$/g, '');
     m = m.replace(/^(?:chapter|ch\.?|فصل|الفصل)\s*(\d+(?:\.\d+)?)\s*(?:[-–—:.#|]\s*)?/i, '');
-    if (m !== (name || '').trim()) return m.trim();
+    if (m !== raw) return m.replace(/["«»“”'´`^]/g, '').trim();
     m = m.replace(/^(?:فصل|الفصل)\s*(?:الأول|الثاني|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر)\s*(?:[:|.\-–—]?\s*)/i, '');
     m = m.replace(/^(?:فصل|الفصل)\s*[:|.\-–—]\s*/i, '');
-    return m.trim();
+    return m.replace(/["«»“”'´`^]/g, '').trim();
   },
 
   // Build the final "Chapter <number> <name>" title; auto-generate missing numbers.
@@ -212,7 +215,7 @@ registerExtension({
       var block = match[2];
       var linkMatch = block.match(/<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
       if (!linkMatch) continue;
-      var rawTitle = this._stripTags(linkMatch[2]);
+      var rawTitle = this._decodeEntities(this._stripTags(linkMatch[2]));
       var cleanTitle = this._toLatinDigits(rawTitle);
 
       var numMatch = cleanTitle.match(/(?:الفصل|فصل|Chapter|Ch\.?)\s*(\d+(?:\.\d+)?)/i);

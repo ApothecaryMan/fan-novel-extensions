@@ -1,0 +1,15 @@
+{
+  "name": "fan-novel-extensions",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Fan Novel — extension repository (signed index + JS bundles)",
+  "scripts": {
+    "generate-keys": "node scripts/generate-keys.mjs",
+    "build": "node scripts/build-index.mjs",
+    "build:sign": "node scripts/build-index.mjs --sign"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.4.0"
+  }
+}

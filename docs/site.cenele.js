@@ -6,7 +6,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.5.1',
+  version: '1.5.2',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -91,14 +91,11 @@ registerExtension({
     if (!str) return undefined;
 
     var now = Date.now();
-    var sixDaysMs = 6 * 24 * 3600 * 1000;
-    function _fmtIfOld(ts) {
-      if (ts && (now - ts) > sixDaysMs) {
-        var d = new Date(ts);
-        return ('0' + d.getDate()).slice(-2) + '/' + ('0' + (d.getMonth() + 1)).slice(-2) + '/' + String(d.getFullYear()).slice(-2);
-      }
-      return ts;
-    }
+
+    // Note: always return the raw epoch-ms timestamp. `uploadedAt` is typed as
+    // `number` (NovelSource.ts / remoteSourceAdapter.ts) — formatting timestamps
+    // to a "DD/MM/YY" string here would drop them entirely on device, so the
+    // display layer is responsible for rendering friendly dates.
 
     // 1. Relative Arabic patterns — supports both "منذ N وحدة" and "N وحدة منذ",
     // Latin digits, Arabic digit words, and dual forms (يومين / ساعتين / …).
@@ -106,7 +103,7 @@ registerExtension({
       var relMs = this._relativeUnitMs(str);
       if (relMs !== undefined) {
         var amount = this._relativeAmount(str);
-        return _fmtIfOld(now - relMs * amount);
+        return now - relMs * amount;
       }
     }
 
@@ -136,19 +133,19 @@ registerExtension({
           if (day > 1000) { var tmp = day; day = year; year = tmp; }
           if (year < 100) year += 2000;
           var dateObj = new Date(year, monthIdx, day, 12, 0, 0);
-          if (!isNaN(dateObj.getTime())) return _fmtIfOld(dateObj.getTime());
+          if (!isNaN(dateObj.getTime())) return dateObj.getTime();
         } else if (nums && nums.length === 1) {
           var dayOnly = parseInt(nums[0], 10);
           var curYear = new Date().getFullYear();
           var dObj = new Date(curYear, monthIdx, dayOnly, 12, 0, 0);
-          if (!isNaN(dObj.getTime())) return _fmtIfOld(dObj.getTime());
+          if (!isNaN(dObj.getTime())) return dObj.getTime();
         }
       }
     }
 
     // 3. Standard date parse fallback
     var parsed = Date.parse(str);
-    if (!isNaN(parsed)) return _fmtIfOld(parsed);
+    if (!isNaN(parsed)) return parsed;
 
     return undefined;
   },

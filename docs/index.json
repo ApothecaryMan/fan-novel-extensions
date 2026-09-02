@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1788368185459,
+  "generatedAt": 1788369455263,
   "extensions": [
     {
       "id": "site:cenele",
       "name": "فضاء الروايات",
       "lang": "ar",
-      "version": "1.5.1",
+      "version": "1.5.2",
       "apiVersion": 1,
-      "size": 21406,
-      "sha256": "f34274407498302fd8be93a25f9123c33d60c5ba2e4c68ebb4fc2a2b66d354a7",
+      "size": 21364,
+      "sha256": "f72a963312ce875a33b64b4db6a927ff25a57ff243a89d43080827682511a5e6",
       "url": "site.cenele.js",
       "baseUrl": "https://cenele.com"
     },
@@ -25,5 +25,5 @@
       "baseUrl": "https://kolnovel.com"
     }
   ],
-  "signature": "ip3xUgIATQBI1j7KMUBQC-BZp723OF_a8kpduGkG-JMjUkRHakP7GBLrdGVX_ZSpqNldXkb5Lwf-a2QxRqDCBw"
+  "signature": "uJW1KEyhqy6H4Y5Ju_Mbhrp36F-aZGaNocj3Rh8LtwYIDiWpCUhlaFwUawKUkfVHvKGiIvdbBvwz_8FykYlsAg"
 }

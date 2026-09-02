@@ -2,11 +2,45 @@
 // Clean sandboxed scraper adhering to the Extension Runtime Specification (ctx.xFetch).
 // Chapter lists are lazy: the novel page only renders the last 8, the full list is
 // fetched over admin-ajax (nhv_manga_single_chapters_page). Host never opens sockets.
+//
+// Cache lives at MODULE level (not on the extension object) so parseNovelInfo() then
+// parseChapterList() share one fetch even if the host re-evaluates the script for each
+// parser call. It is bounded (small eviction cap) and time-limited (3 min) so it can
+// never grow without bound or serve dangerously stale HTML. Only successful GETs are
+// cached; misses/failures are never stored. Null-prototype map avoids key collisions.
+var _htmlCache = Object.create(null); // url -> { res, ts }
+var _HTML_CACHE_TTL_MS = 3 * 60 * 1000;
+var _HTML_CACHE_CAP = 8;
+
+function _fetchCachedPage(url, ctx) {
+  var now = Date.now();
+  var hit = _htmlCache[url];
+  if (hit && (now - hit.ts) < _HTML_CACHE_TTL_MS) {
+    return Promise.resolve(hit.res);
+  }
+  return ctx.xFetch(url).then(function (res) {
+    if (res && res.ok) {
+      _htmlCache[url] = { res: res, ts: now };
+      // Evict the oldest entry beyond the cap so the module cache stays bounded
+      // even when a host reuses the module context for many novels.
+      var keys = Object.keys(_htmlCache);
+      if (keys.length > _HTML_CACHE_CAP) {
+        var oldest = keys[0];
+        for (var i = 1; i < keys.length; i++) {
+          if (_htmlCache[keys[i]].ts < _htmlCache[oldest].ts) oldest = keys[i];
+        }
+        delete _htmlCache[oldest];
+      }
+    }
+    return res;
+  });
+}
+
 registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.6.0',
+  version: '1.6.1',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -114,32 +148,6 @@ registerExtension({
       out.push(ch);
     }, this);
     return out;
-  },
-
-  // Tiny shared LRU cache for the (heavy, static) novel page, so parseNovelInfo and
-  // parseChapterList don't each fetch the same HTML when the app calls them back to
-  // back for one novel. Bounded and time-limited so the data can't go stale. Misses
-  // and failures are never cached; only ok GET responses are stored.
-  _novelCache: { ttl: 5 * 60 * 1000, cap: 8, map: Object.create(null) },
-
-  _fetchNovelHtml: async function (url, ctx) {
-    var cache = this._novelCache;
-    var hit = cache.map[url];
-    if (hit && (Date.now() - hit.t) < cache.ttl) return hit.html;
-    var res = await ctx.xFetch(url);
-    if (!res.ok) throw new Error('فشل جلب صفحة الرواية: ' + res.status);
-    var html = res.text;
-    cache.map[url] = { t: Date.now(), html: html };
-    var keys = Object.keys(cache.map);
-    // Evict oldest beyond cap (simple O(n) is fine at cap=8).
-    if (keys.length > cache.cap) {
-      var oldest = keys[0];
-      for (var i = 1; i < keys.length; i++) {
-        if (cache.map[keys[i]].t < cache.map[oldest].t) oldest = keys[i];
-      }
-      delete cache.map[oldest];
-    }
-    return html;
   },
 
   _parseDate: function (raw) {
@@ -271,7 +279,9 @@ registerExtension({
   // ---------------------------------------------------------------
   parseNovelInfo: async function (url, ctx) {
     var fullUrl = this._absUrl(url);
-    var html = await this._fetchNovelHtml(fullUrl, ctx);
+    var res = await _fetchCachedPage(fullUrl, ctx);
+    if (!res.ok) throw new Error('فشل جلب تفاصيل الرواية: ' + res.status);
+    var html = res.text;
 
     var titleMatch = html.match(/<h1[^>]*>([^<]+)<\/h1>/i) || html.match(/<title>([^–\-&#<]+)/i);
     var title = titleMatch ? this._stripTags(titleMatch[1]).replace(/فضاء الروايات/g, '').trim() : 'رواية';
@@ -330,7 +340,9 @@ registerExtension({
   // ---------------------------------------------------------------
   parseChapterList: async function (novelUrl, ctx) {
     var fullUrl = this._absUrl(novelUrl);
-    var html = await this._fetchNovelHtml(fullUrl, ctx);
+    var res = await _fetchCachedPage(fullUrl, ctx);
+    if (!res.ok) throw new Error('فشل جلب قائمة الفصول: ' + res.status);
+    var html = res.text;
 
     // Fallback: parse whatever chapter rows shipped in the page (usually the last 8).
     var fallbackChapters = this._parseChapterRows(html);

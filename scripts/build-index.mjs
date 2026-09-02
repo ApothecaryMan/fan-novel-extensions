@@ -38,6 +38,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const EXTENSIONS_DIR = join(ROOT, 'extensions');
 const DIST_DIR = join(ROOT, 'dist');
+const DOCS_DIR = join(ROOT, 'docs');
 const KEYS_DIR = join(ROOT, 'keys');
 
 // ---- Canonical JSON (must match the mobile app's canonicalJson.ts) ----
@@ -199,8 +200,16 @@ function main() {
     console.log(`\n⚠️  Index NOT signed (dev mode). Use --sign for production.`);
   }
 
+  mkdirSync(DOCS_DIR, { recursive: true });
+  for (const file of files) {
+    copyFileSync(join(EXTENSIONS_DIR, file), join(DOCS_DIR, file));
+  }
+
   writeFileSync(join(DIST_DIR, 'index.json'), JSON.stringify(output, null, 2));
-  console.log(`📄 dist/index.json written`);
+  writeFileSync(join(DOCS_DIR, 'index.json'), JSON.stringify(output, null, 2));
+  writeFileSync(join(DIST_DIR, '.nojekyll'), '# Disable Jekyll\n');
+  writeFileSync(join(DOCS_DIR, '.nojekyll'), '# Disable Jekyll\n');
+  console.log(`📄 dist/index.json & docs/index.json written`);
   console.log(`📦 ${entries.length} extension(s) ready`);
 }
 

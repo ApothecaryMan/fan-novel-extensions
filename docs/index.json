@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1788367586345,
+  "generatedAt": 1788368185459,
   "extensions": [
     {
       "id": "site:cenele",
@@ -19,11 +19,11 @@
       "lang": "ar",
       "version": "1.2.1",
       "apiVersion": 1,
-      "size": 23315,
-      "sha256": "4c9deaa52e97d50a95b8925055c34a3a6a477b357b323048eb95a93fdf2fdc63",
+      "size": 22804,
+      "sha256": "338d27b79a26fe01345ec5b2d1390a92a50dd8c421e062774f267240e9d46ba3",
       "url": "site.kolnovel.js",
       "baseUrl": "https://kolnovel.com"
     }
   ],
-  "signature": "CogsSfDNl4GubYr0z7ghdUfDu0Xu3qDjwRoFu17PJw_PofZ7BCPB-lI8K2YUW1fH_YCmNw19Wf97ZuhS0KEhDg"
+  "signature": "ip3xUgIATQBI1j7KMUBQC-BZp723OF_a8kpduGkG-JMjUkRHakP7GBLrdGVX_ZSpqNldXkb5Lwf-a2QxRqDCBw"
 }

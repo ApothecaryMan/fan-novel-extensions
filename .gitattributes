@@ -1,0 +1,5 @@
+# Normalize line endings so the bytes hashed/sized at build time
+# match the bytes actually served (avoids source size/checksum mismatch).
+* text=auto eol=lf
+*.js text eol=lf
+*.json text eol=lf

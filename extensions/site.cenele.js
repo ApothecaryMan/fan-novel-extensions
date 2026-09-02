@@ -6,7 +6,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.5.6',
+  version: '1.5.7',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -416,15 +416,27 @@ registerExtension({
     rawContent = rawContent.replace(/<aside[^>]*>[\s\S]*?<\/aside>/gi, '');
 
     var paragraphs = [];
-    var pRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi;
-    var pMatch;
-    while ((pMatch = pRegex.exec(rawContent)) !== null) {
-      var text = this._decodeEntities(this._stripTags(pMatch[1]));
+    // cenele lays the chapter body out in block elements (mostly <div>, sometimes
+    // <p>/<li>), so extract from any block container instead of <p>-only.
+    var blockRegex = /<(?:div|p|li|h[1-6])[^>]*>([\s\S]*?)<\/(?:div|p|li|h[1-6])>/gi;
+    var blockMatch;
+    while ((blockMatch = blockRegex.exec(rawContent)) !== null) {
+      var text = this._decodeEntities(this._stripTags(blockMatch[1]));
       if (!text) continue;
-      if (/^(نهاية الفصل|تم الفصل|الفصل التالي|انتهى الفصل)/.test(text)) break;
-      // Prevent duplicating the chapter title/heading at the top of the content.
-      text = this._stripChapterPrefix(text)
-        .replace(/^\[?\s*(الفصل|فصل)\s+(:|-)\s*/i, '')
+      if (/^(نهاية الفصل|تم الفصل|الفصل التالي|انتهى الفصل|النهاية|تمت)/.test(text)) break;
+      // Skip decorative ornament lines and the arabic basmala preamble.
+      if (/^[-ـ—_]{3,}$/.test(text)) continue;
+      if (/^بسم الله/.test(text)) continue;
+      // Drop "المترجم : ..." / "ترجمة ..." credit lines.
+      text = text.replace(/^\s*(المترجم|مترجم|الترجمة|ترجمة)\s*[:|]?\s*[^\n]*$/i, '').trim();
+      if (!text) continue;
+      // Drop the chapter-title header block entirely ("الفصل 663: لا، دانييل",
+      // "Chapter 1: Name") so the name is not repeated beneath the title.
+      // Otherwise just strip a leading prefix for blocks that begin with one.
+      if (/^(?:chapter|ch\.?|فصل|الفصل)\s*\d+(?:\s*[:—|.-]|\s+)[^\n]*$/i.test(text)) {
+        continue;
+      }
+      text = text.replace(/^\[?\s*(?:chapter|ch\.?|فصل|الفصل)\s*\d+(?:\s*[:—|.-]\s*|\s+)/i, '')
         .trim();
       if (!text) continue;
       paragraphs.push(text);

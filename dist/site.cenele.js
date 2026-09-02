@@ -6,7 +6,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.5.5',
+  version: '1.5.6',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -107,7 +107,7 @@ registerExtension({
       var num = ch.number || i + 1;
       var cleanName = this._stripChapterPrefix(ch.title);
       ch.number = num;
-      ch.title = 'الفصل ' + num + (cleanName ? ' ' + cleanName : '');
+      ch.title = 'الفصل ' + num + (cleanName ? ' - ' + cleanName : '');
       out.push(ch);
     }, this);
     return out;

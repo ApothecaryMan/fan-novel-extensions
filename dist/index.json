@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1788377865240,
+  "generatedAt": 1788377932282,
   "extensions": [
     {
       "id": "site:cenele",
       "name": "فضاء الروايات",
       "lang": "ar",
-      "version": "1.5.5",
+      "version": "1.5.6",
       "apiVersion": 1,
-      "size": 22924,
-      "sha256": "063023d0c005115d20664bcf20610d59179979728ebc39af8d8a002d2d95ae65",
+      "size": 22926,
+      "sha256": "6f7422273a4253e25ef41c60401237704fce25951a529c6876966c30b9ff0f57",
       "url": "site.cenele.js",
       "baseUrl": "https://cenele.com"
     },
@@ -17,10 +17,10 @@
       "id": "site:kolnovel",
       "name": "كول نوفيل",
       "lang": "ar",
-      "version": "1.2.4",
+      "version": "1.2.5",
       "apiVersion": 1,
-      "size": 24483,
-      "sha256": "4dfd451924d9373bd2414239bcb32600e893ff98050af56b683fd9f8ccaa9ecb",
+      "size": 24485,
+      "sha256": "9b1d593e9fdc498326141fa2499ba00e17a1e4dbb6246487acfe070f8669a930",
       "url": "site.kolnovel.js",
       "baseUrl": "https://kolnovel.com"
     },
@@ -36,5 +36,5 @@
       "baseUrl": "https://novelfull.com"
     }
   ],
-  "signature": "CnPszi01_Cjz4nm9JuOivae9oKt83kVSSlo53eVqbjHo9tJn4itq-B0lyRprrFtHc_KuLOOyVXGa_HCFg1ZbCQ"
+  "signature": "N_x_Y-yCt-Sm8qw_o-l--1Q3L-7E_AgjoEwnp67X3MPvCUcGQAYTtppMNuuNR9DsDmHssl1-Ddx4bNHaZxtVBQ"
 }

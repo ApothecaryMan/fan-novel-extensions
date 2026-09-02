@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1788379127750,
+  "generatedAt": 1788379488913,
   "extensions": [
     {
       "id": "site:cenele",
       "name": "فضاء الروايات",
       "lang": "ar",
-      "version": "1.5.8",
+      "version": "1.5.9",
       "apiVersion": 1,
-      "size": 24067,
-      "sha256": "d64db1c7e4cd372d989f79dc31fd1e81ba14646af11cae4f86b64326d042f041",
+      "size": 24862,
+      "sha256": "e8aa88345420da5d475a1a1bfb0f485f5a46e9a54d5017a18cf47ae6c54311b6",
       "url": "site.cenele.js",
       "baseUrl": "https://cenele.com"
     },
@@ -28,13 +28,13 @@
       "id": "site:novelfull",
       "name": "NovelFull",
       "lang": "en",
-      "version": "1.1.1",
+      "version": "1.1.2",
       "apiVersion": 1,
-      "size": 14209,
-      "sha256": "7e58fef768dcaffbf19713541c96fdf5ddb30f8acc64a038db612e6b6b85b6bb",
+      "size": 14599,
+      "sha256": "0aae13c7443297b951673318bb0836cf9104f9cc25cc7d7a7a224edc60286fab",
       "url": "site.novelfull.js",
       "baseUrl": "https://novelfull.com"
     }
   ],
-  "signature": "DS0zYUua6oVE2L5wGlPClG0MGhgBnDsxcfjhuzCnJ6EU6LNLWpNNgqw707F5aUU-chjvzD0CSFtdfSak53EQDA"
+  "signature": "V6mm2OzqJTDGCfah9xuUbt1OvhCBY9xlFu2FhTuLj9bWZ17TGBr0hhfxxg8_UqDCWinP0SeaD2BcFg8Y4zfJAg"
 }

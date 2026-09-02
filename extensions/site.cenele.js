@@ -6,7 +6,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.5.8',
+  version: '1.5.9',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -355,24 +355,28 @@ registerExtension({
     var perPage = parseInt(page1Res.per_page, 10) || 100;
     var totalPages = totalChapters > 0 ? Math.ceil(totalChapters / perPage) : (page1Res.has_more ? 2 : 1);
 
-    for (var p = 2; p <= totalPages; p++) {
-      var pageJson = null;
+    // Fetch subsequent pages with bounded concurrency (no forced sleep after each
+    // success). Each page retries independently; backoff/sleep only happens inside
+    // retries, and the shared nonce is re-read each attempt so a 403 nonce refresh.
+    var state = { nonce: nonce, nonceRefreshed: nonceRefreshed };
+    var self = this;
+    var fetchPage = async function (p) {
       for (var attemptNum = 0; attemptNum < 5; attemptNum++) {
-        var pr = await this._ajaxPost(props.ajaxUrl, {
+        var pr = await self._ajaxPost(props.ajaxUrl, {
           action: 'nhv_manga_single_chapters_page',
-          nonce: nonce,
+          nonce: state.nonce,
           manga_id: props.postId,
           volume: '-1',
           page: String(p),
           per_page: '100',
           order: 'asc'
         }, ctx);
-        if (pr.status === 403 && !nonceRefreshed) {
-          var ref2 = await this._ajaxPost(props.ajaxUrl, { action: 'nhv_refresh_front_nonces' }, ctx);
+        if (pr.status === 403 && !state.nonceRefreshed) {
+          var ref2 = await self._ajaxPost(props.ajaxUrl, { action: 'nhv_refresh_front_nonces' }, ctx);
           var refJ2 = JSON.parse(ref2.text || '{}');
           if (refJ2.data && refJ2.data.chapters_nonce) {
-            nonce = refJ2.data.chapters_nonce;
-            nonceRefreshed = true;
+            state.nonce = refJ2.data.chapters_nonce;
+            state.nonceRefreshed = true;
           }
           continue;
         }
@@ -380,14 +384,28 @@ registerExtension({
           await sleep(700 * (attemptNum + 1));
           continue;
         }
-        pageJson = JSON.parse(pr.text || '{}');
-        break;
+        var pageJson = JSON.parse(pr.text || '{}');
+        if (pageJson && pageJson.html) return pageJson.html;
+        return null;
       }
-      if (pageJson && pageJson.html) {
-        collected.push(pageJson.html);
+      return null;
+    };
+    var pages = [];
+    for (var pp = 2; pp <= totalPages; pp++) pages.push(pp);
+    var concurrency = 4;
+    var idx = 0;
+    var workers = [];
+    var worker = async function () {
+      while (idx < pages.length) {
+        var cur = pages[idx++];
+        var html = await fetchPage(cur);
+        if (html) collected.push(html);
       }
-      await sleep(100);
+    };
+    for (var w = 0; w < Math.min(concurrency, pages.length); w++) {
+      workers.push(worker());
     }
+    await Promise.all(workers);
 
     var allChapters = [];
     collected.forEach((function (pageHtml) {

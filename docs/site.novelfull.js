@@ -8,7 +8,7 @@ registerExtension({
   id: 'site:novelfull',
   name: 'NovelFull',
   lang: 'en',
-  version: '1.1.1',
+  version: '1.1.2',
   apiVersion: 1,
   baseUrl: 'https://novelfull.com',
 
@@ -167,12 +167,26 @@ registerExtension({
 
     var chapters = this._parseChapterPage(html);
 
+    var self = this;
+    var pageTasks = [];
     for (var p = 2; p <= pages; p++) {
-      var pageHtml = await this._fetch(base + '?page=' + p, ctx);
-      var pageChaps = this._parseChapterPage(pageHtml);
-      if (pageChaps.length === 0) break;
-      chapters = chapters.concat(pageChaps);
+      pageTasks.push(p);
     }
+    var idx = 0;
+    var concurrency = 4;
+    var workers = [];
+    var worker = async function () {
+      while (idx < pageTasks.length) {
+        var cur = pageTasks[idx++];
+        var pageHtml = await self._fetch(base + '?page=' + cur, ctx);
+        var pageChaps = self._parseChapterPage(pageHtml);
+        if (pageChaps.length) chapters = chapters.concat(pageChaps);
+      }
+    };
+    for (var w = 0; w < Math.min(concurrency, pageTasks.length); w++) {
+      workers.push(worker());
+    }
+    await Promise.all(workers);
 
     chapters = this._finalizeChapters(chapters);
     return chapters;

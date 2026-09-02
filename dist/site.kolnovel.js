@@ -5,7 +5,7 @@ registerExtension({
   id: 'site:kolnovel',
   name: 'كول نوفيل',
   lang: 'ar',
-  version: '1.2.1',
+  version: '1.2.2',
   apiVersion: 1,
   baseUrl: 'https://kolnovel.com',
 
@@ -90,22 +90,15 @@ registerExtension({
     if (!str) return undefined;
 
     var now = Date.now();
-    var sixDaysMs = 6 * 24 * 3600 * 1000;
-    function _fmtIfOld(ts) {
-      if (ts && (now - ts) > sixDaysMs) {
-        var d = new Date(ts);
-        return ('0' + d.getDate()).slice(-2) + '/' + ('0' + (d.getMonth() + 1)).slice(-2) + '/' + String(d.getFullYear()).slice(-2);
-      }
-      return ts;
-    }
 
     // 1. Relative Arabic patterns — supports both "منذ N وحدة" and "N وحدة منذ",
     // Latin digits, Arabic digit words, and dual forms (يومين / ساعتين / …).
+    // Always returns an epoch-ms number so the app can store/format the date.
     if (str.indexOf('منذ') !== -1) {
       var relMs = this._relativeUnitMs(str);
       if (relMs !== undefined) {
         var amount = this._relativeAmount(str);
-        return _fmtIfOld(now - relMs * amount);
+        return now - relMs * amount;
       }
     }
 
@@ -135,19 +128,19 @@ registerExtension({
           if (day > 1000) { var tmp = day; day = year; year = tmp; }
           if (year < 100) year += 2000;
           var dateObj = new Date(year, monthIdx, day, 12, 0, 0);
-          if (!isNaN(dateObj.getTime())) return _fmtIfOld(dateObj.getTime());
+          if (!isNaN(dateObj.getTime())) return dateObj.getTime();
         } else if (nums && nums.length === 1) {
           var dayOnly = parseInt(nums[0], 10);
           var curYear = new Date().getFullYear();
           var dObj = new Date(curYear, monthIdx, dayOnly, 12, 0, 0);
-          if (!isNaN(dObj.getTime())) return _fmtIfOld(dObj.getTime());
+          if (!isNaN(dObj.getTime())) return dObj.getTime();
         }
       }
     }
 
     // 3. Standard date parse fallback
     var parsed = Date.parse(str);
-    if (!isNaN(parsed)) return _fmtIfOld(parsed);
+    if (!isNaN(parsed)) return parsed;
 
     return undefined;
   },
@@ -248,15 +241,29 @@ registerExtension({
       if (!linkMatch) continue;
 
       var chapterUrl = linkMatch[1].trim();
-      // Chapter number from div.epl-num (e.g. "الفصل 1451: كلمة ختامية")
+      // Chapter number from div.epl-num (e.g. "الفصل 1451: كلمة ختامية").
+      // Prefer the number that follows "الفصل" so a volume number is not
+      // mistaken for the chapter number.
       var numberMatch = block.match(/<div[^>]*class="[^"]*epl-num[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
       var rawNum = numberMatch ? this._stripTags(numberMatch[1]) : '';
-      var numParsed = this._toLatinDigits(rawNum).match(/(\d+)/);
+      var cleanNum = this._toLatinDigits(rawNum);
+      var numParsed = cleanNum.match(/(?:الفصل\s*)?(\d+)/i);
       var chapterNumber = numParsed ? parseInt(numParsed[1], 10) : 0;
 
       // Chapter title from div.epl-title
       var titleMatch = block.match(/<div[^>]*class="[^"]*epl-title[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
       var title = titleMatch ? this._decodeEntities(this._stripTags(titleMatch[1])) : '';
+
+      // Fallback: if epl-num had no chapter number, the number may be missing
+      // from the volume block and instead lead the title (e.g. "1235 نهاية...").
+      if (!chapterNumber) {
+        var cleanTitle = this._toLatinDigits(title);
+        var titleNum = cleanTitle.match(/^(\d+)/);
+        if (titleNum) {
+          chapterNumber = parseInt(titleNum[1], 10);
+          title = title.replace(/^[\s\u200E\u200F\u202A-\u202E]*\d+\s*/, '').trim();
+        }
+      }
 
       // Chapter date from div.epl-date or span.chapterdate
       var dateMatch = block.match(/<div[^>]*class="[^"]*epl-date[^"]*"[^>]*>([\s\S]*?)<\/div>/i) ||

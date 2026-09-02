@@ -230,6 +230,26 @@ registerExtension({
     });
   },
 
+  // Read a JSON object from an AJAX response regardless of how the host shapes it.
+  // Some runtimes populate a pre-parsed `.json`/`.data`/`.body`, others return the raw
+  // JSON string in `.text`. Never throw on a non-JSON payload (e.g. a bot/anti-bot HTML
+  // challenge) — fall back to the provided default so the caller degrades gracefully
+  // instead of aborting the whole chapter list.
+  _parseAjaxJson: function (res, def) {
+    def = def || {};
+    if (!res) return def;
+    if (res.json && typeof res.json === 'object') return res.json;
+    if (res.body && typeof res.body === 'object' && res.body !== def) return res.body;
+    var raw = res.json !== undefined ? res.json : res.text;
+    if (typeof raw !== 'string') return def;
+    try {
+      var parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : def;
+    } catch (e) {
+      return def;
+    }
+  },
+
   _nhvProps: function (html) {
     var idx = html.indexOf('nhvNovelV2');
     if (idx === -1) return null;
@@ -367,7 +387,7 @@ registerExtension({
       }, ctx);
       if (r.status === 403 && !nonceRefreshed) {
         var ref = await this._ajaxPost(props.ajaxUrl, { action: 'nhv_refresh_front_nonces' }, ctx);
-        var refJ = JSON.parse(ref.text || '{}');
+        var refJ = this._parseAjaxJson(ref);
         if (refJ.data && refJ.data.chapters_nonce) {
           nonce = refJ.data.chapters_nonce;
           nonceRefreshed = true;
@@ -378,7 +398,7 @@ registerExtension({
         await sleep(700 * (attempt + 1));
         continue;
       }
-      page1Res = JSON.parse(r.text || '{}');
+      page1Res = this._parseAjaxJson(r);
       break;
     }
 
@@ -407,7 +427,7 @@ registerExtension({
         }, ctx);
         if (pr.status === 403 && !state.nonceRefreshed) {
           var ref2 = await self._ajaxPost(props.ajaxUrl, { action: 'nhv_refresh_front_nonces' }, ctx);
-          var refJ2 = JSON.parse(ref2.text || '{}');
+          var refJ2 = self._parseAjaxJson(ref2);
           if (refJ2.data && refJ2.data.chapters_nonce) {
             state.nonce = refJ2.data.chapters_nonce;
             state.nonceRefreshed = true;
@@ -418,7 +438,7 @@ registerExtension({
           await sleep(700 * (attemptNum + 1));
           continue;
         }
-        var pageJson = JSON.parse(pr.text || '{}');
+        var pageJson = self._parseAjaxJson(pr);
         if (pageJson && pageJson.html) return pageJson.html;
         return null;
       }

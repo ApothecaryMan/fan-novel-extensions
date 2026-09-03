@@ -40,7 +40,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.7.0',
+  version: '1.7.1',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -427,6 +427,10 @@ registerExtension({
         continue;
       }
       page1Res = this._parseAjaxJson(r);
+      // Unwrap WordPress-style {success, data: {html, total, …}} envelope.
+      if (page1Res.data && typeof page1Res.data === 'object' && page1Res.data.html) {
+        page1Res = page1Res.data;
+      }
       break;
     }
 
@@ -467,6 +471,10 @@ registerExtension({
           continue;
         }
         var pageJson = self._parseAjaxJson(pr);
+        // Unwrap WordPress-style {success, data: {html, …}} envelope.
+        if (pageJson.data && typeof pageJson.data === 'object' && pageJson.data.html) {
+          pageJson = pageJson.data;
+        }
         if (pageJson && pageJson.html) return pageJson.html;
         return null;
       }
@@ -558,6 +566,11 @@ registerExtension({
         continue;
       }
       pageRes = this._parseAjaxJson(r);
+      // WordPress admin-ajax wraps the payload as {success, data:{html,total,...}}.
+      // Unwrap it so pageRes.html is read directly (same as parseChapterList).
+      if (pageRes && pageRes.data && typeof pageRes.data === 'object' && pageRes.data.html) {
+        pageRes = pageRes.data;
+      }
       break;
     }
 

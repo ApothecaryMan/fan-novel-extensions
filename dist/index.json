@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1788399313722,
+  "generatedAt": 1788399500543,
   "extensions": [
     {
       "id": "site:cenele",
@@ -36,5 +36,5 @@
       "baseUrl": "https://novelfull.com"
     }
   ],
-  "signature": "TFRoBEYUsG_w1QhcFbWeXH2Z7nZ-AIpfyylnBsIwlARq69fsb8RAESrBy5DbVvu2YjapC6X4HW3P1t1H6grEAg"
+  "signature": "pPki8CNcyCJqSOcxxrYdDj_E7jOpS35UwksVUncHZEvDIHUno42Y1fNiG0u6T4ZJLImPKV083n0qINjnvJT9Ag"
 }

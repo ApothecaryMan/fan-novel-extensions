@@ -5,7 +5,7 @@ registerExtension({
   id: 'site:kolnovel',
   name: 'كول نوفيل',
   lang: 'ar',
-  version: '1.5.0',
+  version: '1.5.1',
   apiVersion: 1,
   baseUrl: 'https://kolnovel.com',
 
@@ -308,7 +308,7 @@ registerExtension({
       var rawNum = numberMatch ? this._stripTags(numberMatch[1]) : '';
       var cleanNum = this._toLatinDigits(rawNum);
       var chapterNumber = 0;
-      var afterFasl = cleanNum.match(/(?:الفصل|فصل|chapter)\s*(\d+(?:\.\d+)?)/i);
+      var afterFasl = cleanNum.match(/(?:الفصل|فصل|chapter)\s*(?:الـ)?\s*(\d+(?:\.\d+)?)/i);
       if (afterFasl) {
         chapterNumber = parseFloat(afterFasl[1]);
       } else {
@@ -479,6 +479,10 @@ registerExtension({
                  // word-numbers below, or "الثالث" in "الثالث عشر" gets consumed alone.
                  .replace(/^\[?\s*(الفصل|فصل)\s+(?:الحادي|الثاني)?\s*عشر(?:اء)?\s*[:|\-–—.]?\s*/i, '')
                  .replace(/^\[?\s*(الفصل|فصل)\s+(?:الأول|الثاني|الثالث|الرابع|الخامس)\s+عشر\s*[:|\-–—.]?\s*/i, '')
+                 // Teens 16-19 (السادس عشر .. العاشر عشر)
+                 .replace(/^\[?\s*(الفصل|فصل)\s+(?:السادس|السابع|الثامن|التاسع|العاشر)\s+عشر\s*[:|\-–—.]?\s*/i, '')
+                 // "الفصل الـ 45", "الفصل رقم 45", "الفصل عدد 45"
+                 .replace(/^\[?\s*(الفصل|فصل)\s+(?:الـ|ال|رقم|عدد)\s*\d+\s*[:|\-–—.]?\s*/i, '')
                  .replace(/^\[?\s*(الفصل|فصل)\s+(الأول|الثاني|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر)\s*[:|.]?\s*/i, '')
                  .replace(/^\[?\s*(الفصل|فصل)\s+(?:[أ-ي]{3,}\s+(?:و\s+)?)+[أ-ي]{3,}\s*:\s*/i, '')
                  .replace(/^\[?\s*(الفصل|فصل)\s+\S+:\s*/i, '');
@@ -524,34 +528,45 @@ registerExtension({
     var seen = {};
 
     // Strategy 1: article.maindet cards (search results, /series/, and archive pages)
-    // Reuse the shared maindet parser that extracts multi-genre tags.
+    // Reuse the shared maindet parser that extracts multi-genre tags. Register the
+    // URLs in the outer `seen` map so a novel rendered as BOTH a maindet card and a
+    // utao/hotoday/bsx card on the same page is not emitted twice.
     var maindetResults = this._parseMaindetCards(html);
-    for (var i = 0; i < maindetResults.length; i++) results.push(maindetResults[i]);
+    for (var i = 0; i < maindetResults.length; i++) {
+      results.push(maindetResults[i]);
+      seen[maindetResults[i].url] = true;
+    }
 
-    // Strategy 2: .utao list items (homepage / paginated updates)
-    var utaoRegex = /<div[^>]*class="[^"]*utao[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi;
+    // Strategy 2: .uta latest-update items (homepage / paginated updates).
+    // A single .utao wrapper may hold several .uta items; emit one result per novel
+    // card found rather than only the first link in the block.
+    var utaoRegex = /<div[^>]*class="[^"]*utao[^"]*"[^>]*>([\s\S]*?)(?=<div[^>]*class="[^"]*utao[^"]*"|$)/gi;
     var utaoMatch;
     while ((utaoMatch = utaoRegex.exec(html)) !== null) {
-      var utaoBlock = utaoMatch[1];
-      var utaoLink = utaoBlock.match(/<a[^>]+href="([^"]+\/series\/[^"]+)"[^>]*>/i);
-      if (!utaoLink) continue;
-      var utaoUrl = utaoLink[1].trim();
-      if (seen[utaoUrl]) continue;
-      seen[utaoUrl] = true;
+      var utaRegex = /<div[^>]*class="[^"]*\buta\b[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi;
+      var utaItem;
+      while ((utaItem = utaRegex.exec(utaoMatch[1])) !== null) {
+        var utaBlock = utaItem[1];
+        var utaoLink = utaBlock.match(/<a[^>]+href="([^"]+\/series\/[^"]+)"[^>]*>/i);
+        if (!utaoLink) continue;
+        var utaoUrl = utaoLink[1].trim();
+        if (seen[utaoUrl]) continue;
+        seen[utaoUrl] = true;
 
-      var utaoTitle = utaoBlock.match(/<h[23][^>]*>([^<]+)<\/h[23]>/i) || utaoBlock.match(/title="([^"]+)"/i);
-      var utaoCover = utaoBlock.match(/<img[^>]+src="([^">]+)"/i);
+        var utaoTitle = utaBlock.match(/<h[23][^>]*>([^<]+)<\/h[23]>/i) || utaBlock.match(/title="([^"]+)"/i);
+        var utaoCover = utaBlock.match(/<img[^>]+src="([^">]+)"/i);
 
-      if (utaoTitle && utaoUrl) {
-        results.push({
-          source: this.id,
-          url: utaoUrl,
-          title: this._decodeEntities(this._stripTags(utaoTitle[1]).trim()),
-          coverUrl: utaoCover ? utaoCover[1].trim() : undefined,
-          author: 'غير معروف',
-          category: 'روايات مترجمة',
-          status: 'مستمرة'
-        });
+        if (utaoTitle && utaoUrl) {
+          results.push({
+            source: this.id,
+            url: utaoUrl,
+            title: this._decodeEntities(this._stripTags(utaoTitle[1]).trim()),
+            coverUrl: utaoCover ? utaoCover[1].trim() : undefined,
+            author: 'غير معروف',
+            category: 'روايات مترجمة',
+            status: 'مستمرة'
+          });
+        }
       }
     }
 
@@ -639,7 +654,7 @@ registerExtension({
   // ---------------------------------------------------------------
   // Scrape all unique /genre/<slug>/ links from the home page slider and body.
   getCategories: async function (ctx) {
-    var res = await ctx.xFetch(this._absUrl('/'));
+    var res = await this._safeFetch(this._absUrl('/'), ctx, 'فشل جلب التصنيفات');
     if (!res.ok) return [];
     var html = res.text;
     var categories = [];

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1788447164612,
+  "generatedAt": 1788449773623,
   "extensions": [
     {
       "id": "site:cenele",
@@ -17,10 +17,10 @@
       "id": "site:kolnovel",
       "name": "كول نوفيل",
       "lang": "ar",
-      "version": "1.5.0",
+      "version": "1.5.1",
       "apiVersion": 1,
-      "size": 32710,
-      "sha256": "edaf8a7393b6b40d0618a8b343c06dd65271684e1cf787ced1fb320600173973",
+      "size": 33835,
+      "sha256": "2afc4dbaabc7979d554b52aa39283f889b4e1875dc161092ce934efcd00a727d",
       "url": "site.kolnovel.js",
       "baseUrl": "https://kolnovel.com"
     },
@@ -36,5 +36,5 @@
       "baseUrl": "https://novelfull.com"
     }
   ],
-  "signature": "Sq1xozJDk-HJzVLPcvY1F-lFwGGESM0YvehRy6Xc325BGXdoTfASgko3B-wXzgDbpTFpfnmmFC-_WjmS4Bn3BQ"
+  "signature": "MjeSElkVeaFAHw1QSz53EuBdoo4EWe5WHLEgOWTuR-lqS6h4HfwOPPwTEi26mj2Gjdr64E63kZI_Wb3RWZGRAw"
 }

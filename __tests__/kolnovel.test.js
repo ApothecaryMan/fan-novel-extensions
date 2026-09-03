@@ -27,7 +27,7 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:kolnovel'));
   it('has correct name', () => expect(ext.name).toBe('كول نوفيل'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.5.0'));
+  it('has correct version', () => expect(ext.version).toBe('1.5.1'));
   it('has apiVersion 1', () => expect(ext.apiVersion).toBe(1));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://kolnovel.com'));
 

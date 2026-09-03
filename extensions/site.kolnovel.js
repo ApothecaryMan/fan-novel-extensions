@@ -524,38 +524,9 @@ registerExtension({
     var seen = {};
 
     // Strategy 1: article.maindet cards (search results, /series/, and archive pages)
-    var maindetRegex = /<article[^>]*class="[^"]*maindet[^"]*"[^>]*>([\s\S]*?)<\/article>/gi;
-    var mdMatch;
-    while ((mdMatch = maindetRegex.exec(html)) !== null) {
-      var mdBlock = mdMatch[1];
-      var mdLink = mdBlock.match(/<a[^>]+href="([^"]+\/series\/[^"]+)"[^>]*>/i);
-      if (!mdLink) continue;
-      var mdUrl = mdLink[1].trim();
-      if (seen[mdUrl]) continue;
-      seen[mdUrl] = true;
-
-      var mdTitle = mdBlock.match(/<h2[^>]*itemprop="headline"[^>]*>\s*<a[^>]*>([^<]+)<\/a>/i) ||
-                    mdBlock.match(/<h2[^>]*>\s*<a[^>]*>([^<]+)<\/a>/i);
-      var mdCover = mdBlock.match(/<img[^>]+src="([^">]+)"/i);
-      var mdGenre = mdBlock.match(/<span[^>]*class="[^"]*mdgenre[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
-      var mdScore = mdBlock.match(/<span[^>]*class="[^"]*mdminf[^"]*"[^>]*>[\s\S]*?([\d.]+)/i);
-      var mdCategory = 'روايات مترجمة';
-      if (mdGenre) {
-        var firstGenre = mdGenre[1].match(/<a[^>]*>([^<]+)<\/a>/i);
-        if (firstGenre) mdCategory = firstGenre[1].replace(/^#\s*/, '').trim();
-      }
-
-      results.push({
-        source: this.id,
-        url: mdUrl,
-        title: mdTitle ? this._decodeEntities(mdTitle[1].trim()) : '',
-        coverUrl: mdCover ? mdCover[1].trim() : undefined,
-        author: 'غير معروف',
-        category: mdCategory,
-        status: 'مستمرة',
-        rating: mdScore ? parseFloat(this._toLatinDigits(mdScore[1])) : undefined
-      });
-    }
+    // Reuse the shared maindet parser that extracts multi-genre tags.
+    var maindetResults = this._parseMaindetCards(html);
+    for (var i = 0; i < maindetResults.length; i++) results.push(maindetResults[i]);
 
     // Strategy 2: .utao list items (homepage / paginated updates)
     var utaoRegex = /<div[^>]*class="[^"]*utao[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi;
@@ -600,9 +571,14 @@ registerExtension({
       var hotScore = hotBlock.match(/<span[^>]*class="[^"]*todnum[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
       var hotGen = hotBlock.match(/<div[^>]*class="[^"]*todgen[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
       var hotCat = 'روايات مترجمة';
+      var hotTags = [];
       if (hotGen) {
-        var g = hotGen[1].match(/<a[^>]*>([^<]+)<\/a>/i);
-        if (g) hotCat = g[1].trim();
+        var genRe = /<a[^>]*>([^<]+)<\/a>/gi;
+        var gm;
+        while ((gm = genRe.exec(hotGen[1])) !== null) {
+          hotTags.push(gm[1].replace(/^#\s*/, '').trim());
+        }
+        if (hotTags.length > 0) hotCat = hotTags[0];
       }
       var hotStat = hotBlock.match(/todstat\s+([^"]+)/i);
       var status = 'مستمرة';
@@ -616,6 +592,7 @@ registerExtension({
         coverUrl: hotCover ? hotCover[1].trim() : undefined,
         author: 'غير معروف',
         category: hotCat,
+        tags: hotTags,
         status: status,
         rating: hotScore ? parseFloat(this._toLatinDigits(hotScore[1])) : undefined
       });
@@ -654,5 +631,88 @@ registerExtension({
 
   getPopularNovels: async function (page, ctx) {
     return this.searchNovels('', page, ctx);
+  },
+
+  // ---------------------------------------------------------------
+  // Categories / genres
+  // ---------------------------------------------------------------
+  // Scrape all unique /genre/<slug>/ links from the home page slider and body.
+  getCategories: async function (ctx) {
+    var res = await ctx.xFetch(this._absUrl('/'));
+    if (!res.ok) return [];
+    var html = res.text;
+    var categories = [];
+    var seen = {};
+    // Match href="...kolnovel.com/genre/<slug>/" or href="/genre/<slug>/"
+    var re = /href="[^"]*\/genre\/([^"\/]+)\/"[^>]*>([^<]+)<\/a>/gi;
+    var m;
+    while ((m = re.exec(html)) !== null) {
+      var slug = decodeURIComponent(m[1]);
+      var name = this._decodeEntities(m[2].replace(/^#\s*/, '').trim());
+      if (!name || seen[slug]) continue;
+      seen[slug] = true;
+      categories.push({ name: name, slug: slug });
+    }
+    return categories;
+  },
+
+  // Browse novels filtered by a genre.
+  // URL: /genre/<slug>/  (pagination: /genre/<slug>/page/N/)
+  getCategoryNovels: async function (categorySlug, page, ctx) {
+    var slug = (categorySlug || '').replace(/\s+/g, '-');
+    var pageNum = (page && page > 1) ? Math.floor(page) : 1;
+    var url = this._absUrl('/genre/' + encodeURIComponent(slug) + '/');
+    if (pageNum > 1) url += 'page/' + pageNum + '/';
+    var res = await this._safeFetch(url, ctx, 'فشل جلب صفحة التصنيف');
+    if (!res.ok) return [];
+    // Genre pages use the maindet layout (Strategy 1)
+    return this._parseMaindetCards(res.text);
+  },
+
+  // ---------------------------------------------------------------
+  // maindet card parser — shared by searchNovels Strategy 1 and getCategoryNovels
+  // ---------------------------------------------------------------
+  _parseMaindetCards: function (html) {
+    var results = [];
+    var seen = {};
+    var maindetRegex = /<article[^>]*class="[^"]*maindet[^"]*"[^>]*>([\s\S]*?)<\/article>/gi;
+    var mdMatch;
+    while ((mdMatch = maindetRegex.exec(html)) !== null) {
+      var mdBlock = mdMatch[1];
+      var mdLink = mdBlock.match(/<a[^>]+href="([^"]+\/series\/[^"]+)"[^>]*>/i);
+      if (!mdLink) continue;
+      var mdUrl = mdLink[1].trim();
+      if (seen[mdUrl]) continue;
+      seen[mdUrl] = true;
+
+      var mdTitle = mdBlock.match(/<h2[^>]*itemprop="headline"[^>]*>\s*<a[^>]*>([^<]+)<\/a>/i) ||
+                    mdBlock.match(/<h2[^>]*>\s*<a[^>]*>(([^<]+))<\/a>/i);
+      var mdCover = mdBlock.match(/<img[^>]+src="([^">]+)"/i);
+      var mdGenre = mdBlock.match(/<span[^>]*class="[^"]*mdgenre[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
+      var mdScore = mdBlock.match(/<span[^>]*class="[^"]*mdminf[^"]*"[^>]*>[\s\S]*?([\d.]+)/i);
+      var mdCategory = 'روايات مترجمة';
+      var mdTags = [];
+      if (mdGenre) {
+        var genreRe = /<a[^>]*>([^<]+)<\/a>/gi;
+        var gm;
+        while ((gm = genreRe.exec(mdGenre[1])) !== null) {
+          mdTags.push(gm[1].replace(/^#\s*/, '').trim());
+        }
+        if (mdTags.length > 0) mdCategory = mdTags[0];
+      }
+
+      results.push({
+        source: this.id,
+        url: mdUrl,
+        title: mdTitle ? this._decodeEntities(mdTitle[1].trim()) : '',
+        coverUrl: mdCover ? mdCover[1].trim() : undefined,
+        author: 'غير معروف',
+        category: mdCategory,
+        tags: mdTags,
+        status: 'مستمرة',
+        rating: mdScore ? parseFloat(this._toLatinDigits(mdScore[1])) : undefined
+      });
+    }
+    return results;
   }
 });

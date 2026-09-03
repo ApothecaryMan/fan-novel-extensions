@@ -127,7 +127,21 @@ registerExtension({
     }
 
     var author = this._decodeEntities(this._stripTags(metaRow('Author')));
-    var category = this._decodeEntities(this._stripTags(metaRow('Genre')));
+
+    // Parse multiple genres from the Genre meta row:
+    //   <div><h3>Genre:</h3><a href="/genre/Action">Action</a>, <a href="/genre/Fantasy">Fantasy</a></div>
+    var tags = [];
+    var genreRow = metaRow('Genre');
+    var genreTagRegex = /<a[^>]*href="[^"]*\/genre\/([^"\/]+)"[^>]*>([^<]+)<\/a>/gi;
+    var gm;
+    while ((gm = genreTagRegex.exec(genreRow)) !== null) {
+      tags.push(this._decodeEntities(gm[2].trim()));
+    }
+    if (tags.length === 0) {
+      // Fallback: plain text from metaRow (no <a> tags)
+      var plainGenre = this._decodeEntities(this._stripTags(genreRow)).trim();
+      if (plainGenre) tags = plainGenre.split(/,\s*/);
+    }
 
     var status = 'مستمرة';
     var statusRaw = this._decodeEntities(this._stripTags(metaRow('Status')));
@@ -147,7 +161,8 @@ registerExtension({
       coverUrl: coverUrl,
       summary: summary || undefined,
       status: status,
-      category: ['Translated', category].filter(Boolean).join(' ') || 'Translated Novels',
+      category: tags.length > 0 ? tags[0] : 'Translated Novels',
+      tags: tags,
       rating: isNaN(rating) ? undefined : rating
     };
   },
@@ -359,6 +374,43 @@ registerExtension({
 
   getPopularNovels: async function (page, ctx) {
     var res = await ctx.xFetch(this._absUrl('/most-popular'));
+    if (!res.ok) return [];
+    return this._parseNovelRows(res.text);
+  },
+
+  // ---------------------------------------------------------------
+  // Categories / genres
+  // ---------------------------------------------------------------
+  // Scrape the Genre dropdown nav from the home page:
+  //   <div class="dropdown-menu multi-column"> .col-md-4 > ul > li > a[href="/genre/<Name>"]
+  getCategories: async function (ctx) {
+    var res = await ctx.xFetch(this._absUrl('/'));
+    if (!res.ok) return [];
+    var html = res.text;
+    var categories = [];
+    var seen = {};
+    var re = /<a[^>]+href="\/genre\/([^"\/]+)"[^>]*>([^<]+)<\/a>/gi;
+    var m;
+    while ((m = re.exec(html)) !== null) {
+      var slug = decodeURIComponent(m[1].replace(/\+/g, ' '));
+      var name = this._decodeEntities(m[2].trim());
+      if (!name || seen[name]) continue;
+      seen[name] = true;
+      categories.push({ name: name, slug: slug });
+    }
+    return categories;
+  },
+
+  // Browse novels filtered by a genre.
+  // URL: /genre/<Slug>  (same layout as /most-popular, parsed by _parseNovelRows)
+  getCategoryNovels: async function (categorySlug, page, ctx) {
+    // Slug is the raw URL segment (e.g. "Gender+Bender", "Harem", "Sci-fi").
+    // If the caller passes a human-readable name, convert spaces to '+'.
+    var slug = (categorySlug || '').replace(/\s+/g, '+');
+    var pageNum = (page && page > 1) ? Math.floor(page) : 1;
+    var url = this._absUrl('/genre/' + slug);
+    if (pageNum > 1) url += '?page=' + pageNum;
+    var res = await ctx.xFetch(url);
     if (!res.ok) return [];
     return this._parseNovelRows(res.text);
   }

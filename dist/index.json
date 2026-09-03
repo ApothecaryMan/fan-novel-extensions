@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1788399500543,
+  "generatedAt": 1788445354603,
   "extensions": [
     {
       "id": "site:cenele",
@@ -8,8 +8,8 @@
       "lang": "ar",
       "version": "1.7.1",
       "apiVersion": 1,
-      "size": 33220,
-      "sha256": "7ff6f9281430c8fb907d8747189a4a6c1a62bac1c1e69aca56b77d5911041c12",
+      "size": 36475,
+      "sha256": "53a02aa193196dd90edfbf72a79e45e1f25d6864aa097e69458774328b99eeb8",
       "url": "site.cenele.js",
       "baseUrl": "https://cenele.com"
     },
@@ -19,8 +19,8 @@
       "lang": "ar",
       "version": "1.5.0",
       "apiVersion": 1,
-      "size": 30198,
-      "sha256": "093072cc475a2457e9bcfae25933ad4c840c33ff991ded54f85eb27095600003",
+      "size": 32607,
+      "sha256": "ce1d19eb0d6d6993cfe70271b848c7fc40bad9461279f072d966cfaff07f8138",
       "url": "site.kolnovel.js",
       "baseUrl": "https://kolnovel.com"
     },
@@ -30,11 +30,11 @@
       "lang": "en",
       "version": "1.2.0",
       "apiVersion": 1,
-      "size": 15527,
-      "sha256": "029c0242e1f8da6b69172b6e9f2e5831f5924c6aeecfaa1360bdbadebe33bdab",
+      "size": 17659,
+      "sha256": "b0867ef04bcee5490de809472c469459299e7e3d76345067c43cffdd48c7c523",
       "url": "site.novelfull.js",
       "baseUrl": "https://novelfull.com"
     }
   ],
-  "signature": "pPki8CNcyCJqSOcxxrYdDj_E7jOpS35UwksVUncHZEvDIHUno42Y1fNiG0u6T4ZJLImPKV083n0qINjnvJT9Ag"
+  "signature": "CT3Nh-4iKJUcvSseIDTqIfkynXLK51GNwnwawdOKnN5R_z5FAyj_EGpyYK1o6FZJOVjbtk_zzZzJgikDfQXvBg"
 }

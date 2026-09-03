@@ -356,6 +356,11 @@ registerExtension({
       summary = this._decodeEntities(this._stripTags(block)).replace(/[\s{]+$/g, '');
     }
 
+    // The cenele novel page does NOT expose readable genre names — only numeric
+    // WordPress taxonomy IDs in the body class (wp-manga-genre-N). Without a
+    // mapping table we cannot resolve these to names, so the category defaults
+    // to 'روايات مترجمة'. Genre names ARE available on browse/search result
+    // cards via _parseNhvCards (nhv-library-card__genres) and will be set there.
     return {
       source: this.id,
       url: fullUrl,
@@ -364,10 +369,9 @@ registerExtension({
       coverUrl: coverUrl,
       summary: summary,
       status: status,
-      // The novel page only renders the last ~8 chapters inline; reporting that
-      // lazy preview count as `totalChapters` makes the app show "8 chapters"
-      // for every novel. Leave it undefined so the caller falls back to the real
-      // full list returned by parseChapterList.
+      // Leave totalChapters undefined — the novel page only renders the last ~8
+      // chapters inline; the app falls back to the real full list from
+      // parseChapterList.
       totalChapters: undefined,
       category: 'روايات مترجمة'
     };
@@ -657,6 +661,99 @@ registerExtension({
     var results = [];
 
     // Grid cards (browse + genre/search pages that use nhv-library-card)
+    // Reuse the shared nhv-library-card parser that extracts multi-genre tags.
+    var nhvResults = this._parseNhvCards(html);
+    for (var i = 0; i < nhvResults.length; i++) results.push(nhvResults[i]);
+
+    // Fallback: standard madara c-tabs-item rows (real search results / ?s=...&post_type=wp-manga)
+    if (results.length === 0) {
+      var rowRegex = /<div[^>]*class="[^"]*row c-tabs-item__content[^"]*"[^>]*>([\s\S]*?)(?=<div[^>]*class="[^"]*row c-tabs-item__content[^"]*"|$)/gi;
+      var rowMatch;
+      while ((rowMatch = rowRegex.exec(html)) !== null) {
+        var block = rowMatch[1];
+        var mLink = block.match(/<h3[^>]*class="[^"]*h4[^"]*"[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/i);
+        if (!mLink) continue;
+        var mStatusMatch = block.match(/mg_status[^>]*>[\s\S]*?<div class="summary-content">([\s\S]*?)<\/div>/i);
+        var mStatus = mStatusMatch ? this._stripTags(mStatusMatch[1]) : '';
+        mStatus = mStatus.replace(/^(OnGoing|Ongoing|Ongoing)$/i, 'مستمرة')
+          .replace(/^(Completed|Complete)$/i, 'مكتملة')
+          .replace(/^(OnHold|Dropped)$/i, 'مستمرة');
+        results.push({
+          source: this.id,
+          url: mLink[1].trim(),
+          title: this._decodeEntities(mLink[2].trim()),
+          coverUrl: (block.match(/<img[^>]+src="([^">]+)"/i) || [])[1] || undefined,
+          author: (block.match(/mg_author[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/i) || [])[1] || 'غير معروف',
+          category: (block.match(/mg_genres[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/i) || [])[1] || 'روايات مترجمة',
+          tags: (function () {
+            var genreBlock = block.match(/mg_genres[^>]*>([\s\S]*?)<\/div>/i);
+            if (!genreBlock) return [];
+            var tags = [];
+            var gr = /<a[^>]*>([^<]+)<\/a>/gi;
+            var gm;
+            while ((gm = gr.exec(genreBlock[1])) !== null) {
+              tags.push(gm[1].trim());
+            }
+            return tags;
+          })(),
+          status: mStatus || 'مستمرة'
+        });
+      }
+    }
+
+    return results;
+  },
+
+  getPopularNovels: async function (page, ctx) {
+    return this.searchNovels('', page, ctx);
+  },
+
+  // ---------------------------------------------------------------
+  // Categories / genres
+  // ---------------------------------------------------------------
+  // Parse the genre list from the /cont/ browse page:
+  //   .genres__collapse > .row.genres > ul > li > a[href="/cont-genre/<slug>/"]
+  getCategories: async function (ctx) {
+    var res = await ctx.xFetch(this._absUrl('/cont/') + '?m_orderby=views');
+    if (!res.ok) return [];
+    var html = res.text;
+    var categories = [];
+    var seen = {};
+    // Extract the genres__collapse block to avoid matching nav menu links
+    var collapseMatch = html.match(/<div[^>]*class="[^"]*genres__collapse[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/i);
+    var region = collapseMatch ? collapseMatch[1] : html;
+    var re = /<a[^>]+href="[^"]*\/cont-genre\/([^"\/]+)\/"[^>]*>([\s\S]*?)<\/a>/gi;
+    var m;
+    while ((m = re.exec(region)) !== null) {
+      var slug = decodeURIComponent(m[1]);
+      // Strip <span class="count">…</span> and whitespace from the name
+      var name = m[2].replace(/<span[^>]*class="[^"]*count[^"]*"[^>]*>[\s\S]*?<\/span>/gi, '').trim();
+      name = this._decodeEntities(this._stripTags(name));
+      if (!name || seen[slug]) continue;
+      seen[slug] = true;
+      categories.push({ name: name, slug: slug });
+    }
+    return categories;
+  },
+
+  // Browse novels filtered by a genre.
+  // URL: /cont-genre/<slug>/  (pagination: /cont-genre/<slug>/page/N/?m_orderby=latest)
+  getCategoryNovels: async function (categorySlug, page, ctx) {
+    var slug = categorySlug || '';
+    var pageNum = (page && page > 1) ? Math.floor(page) : 1;
+    var url = this._absUrl('/cont-genre/' + encodeURIComponent(slug) + '/');
+    if (pageNum > 1) url += 'page/' + pageNum + '/';
+    url += '?m_orderby=latest';
+    var res = await ctx.xFetch(url);
+    if (!res.ok) return [];
+    return this._parseNhvCards(res.text);
+  },
+
+  // ---------------------------------------------------------------
+  // nhv-library-card parser — shared by searchNovels Strategy 1 and getCategoryNovels
+  // ---------------------------------------------------------------
+  _parseNhvCards: function (html) {
+    var results = [];
     var cardRegex = /<article class="nhv-library-card">([\s\S]*?)<\/article>/gi;
     var cardMatch;
     while ((cardMatch = cardRegex.exec(html)) !== null) {
@@ -681,56 +778,32 @@ registerExtension({
 
       var genreMatch = cardBlock.match(/<div class="nhv-library-card__genres">([\s\S]*?)<\/div>/i);
       var category = 'روايات مترجمة';
+      var tags = [];
       if (genreMatch) {
-        var firstGenre = genreMatch[1].match(/<a[^>]*>([^<]+)<\/a>/i);
-        if (firstGenre) category = firstGenre[1].trim();
+        var genreRe = /<a[^>]*>([^<]+)<\/a>/gi;
+        var gm;
+        while ((gm = genreRe.exec(genreMatch[1])) !== null) {
+          tags.push(gm[1].trim());
+        }
+        if (tags.length > 0) category = tags[0];
       }
 
       var statusMatch = cardBlock.match(/nhv-library-card__status[^>]*>([^<]+)<\/span>/i);
       var status = statusMatch ? statusMatch[1].trim() : 'مستمرة';
 
       results.push({
-        source: this.id,
+        source: 'site:cenele',
         url: novelUrl,
         title: title,
         coverUrl: coverUrl,
         author: 'غير معروف',
         category: category,
+        tags: tags,
         totalChapters: totalChapters,
         summary: summary,
         status: status
       });
     }
-
-    // Fallback: standard madara c-tabs-item rows (real search results / ?s=...&post_type=wp-manga)
-    if (results.length === 0) {
-      var rowRegex = /<div[^>]*class="[^"]*row c-tabs-item__content[^"]*"[^>]*>([\s\S]*?)(?=<div[^>]*class="[^"]*row c-tabs-item__content[^"]*"|$)/gi;
-      var rowMatch;
-      while ((rowMatch = rowRegex.exec(html)) !== null) {
-        var block = rowMatch[1];
-        var mLink = block.match(/<h3[^>]*class="[^"]*h4[^"]*"[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/i);
-        if (!mLink) continue;
-        var mStatusMatch = block.match(/mg_status[^>]*>[\s\S]*?<div class="summary-content">([\s\S]*?)<\/div>/i);
-        var mStatus = mStatusMatch ? this._stripTags(mStatusMatch[1]) : '';
-        mStatus = mStatus.replace(/^(OnGoing|Ongoing|Ongoing)$/i, 'مستمرة')
-          .replace(/^(Completed|Complete)$/i, 'مكتملة')
-          .replace(/^(OnHold|Dropped)$/i, 'مستمرة');
-        results.push({
-          source: this.id,
-          url: mLink[1].trim(),
-          title: this._decodeEntities(mLink[2].trim()),
-          coverUrl: (block.match(/<img[^>]+src="([^">]+)"/i) || [])[1] || undefined,
-          author: (block.match(/mg_author[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/i) || [])[1] || 'غير معروف',
-          category: (block.match(/mg_genres[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/i) || [])[1] || 'روايات مترجمة',
-          status: mStatus || 'مستمرة'
-        });
-      }
-    }
-
     return results;
-  },
-
-  getPopularNovels: async function (page, ctx) {
-    return this.searchNovels('', page, ctx);
   }
 });

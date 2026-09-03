@@ -5,7 +5,7 @@ registerExtension({
   id: 'site:kolnovel',
   name: 'كول نوفيل',
   lang: 'ar',
-  version: '1.4.0',
+  version: '1.5.0',
   apiVersion: 1,
   baseUrl: 'https://kolnovel.com',
 
@@ -286,10 +286,10 @@ registerExtension({
   // ---------------------------------------------------------------
   // Chapter list — inline on the novel page
   // ---------------------------------------------------------------
-  parseChapterList: async function (novelUrl, ctx) {
-    var fullUrl = this._absUrl(novelUrl);
-    var html = await this._fetchNovelHtml(fullUrl, ctx);
-
+  // Parse the inline chapter list from the novel page HTML (shared by the full
+  // parseChapterList and the incremental fetchLatestChapters). Returns raw rows:
+  // the caller still applies _finalizeChapters.
+  _fetchInlineChapters: function (html) {
     var chapters = [];
     // Chapters are in .eplister ul li elements (inside collapsible sections)
     var liRegex = /<li[^>]*data-ID="(\d+)"[^>]*>([\s\S]*?)<\/li>/gi;
@@ -359,8 +359,33 @@ registerExtension({
       }
     }
 
-    return this._finalizeChapters(chapters);
+    return chapters;
   },
+
+  parseChapterList: async function (novelUrl, ctx) {
+    var fullUrl = this._absUrl(novelUrl);
+    var html = await this._fetchNovelHtml(fullUrl, ctx);
+    return this._finalizeChapters(this._fetchInlineChapters(html));
+  },
+
+  // ---------------------------------------------------------------
+  // Incremental chapter refresh (Tachiyomi-style)
+  // The host tells us how many chapters it already has (`knownCount`); the list
+  // is already inline on the novel page (1 request either way), so we just parse
+  // it and return only chapters newer than what the app already stores. This
+  // spares the app the DB upserts for hundreds of unchanged chapters.
+  // ---------------------------------------------------------------
+  fetchLatestChapters: async function (novelUrl, knownCount, ctx) {
+    var fullUrl = this._absUrl(novelUrl);
+    var html = await this._fetchNovelHtml(fullUrl, ctx);
+    var all = this._fetchInlineChapters(html);
+    var latest = [];
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].number > knownCount) latest.push(all[i]);
+    }
+    return this._finalizeChapters(latest);
+  },
+
 
   // ---------------------------------------------------------------
   // Chapter body

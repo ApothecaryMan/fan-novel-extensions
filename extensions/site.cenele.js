@@ -40,7 +40,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.6.4',
+  version: '1.7.0',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -499,6 +499,74 @@ registerExtension({
     if (allChapters.length === 0) return this._finalizeChapters(fallbackChapters);
 
     return this._finalizeChapters(allChapters);
+  },
+
+  // ---------------------------------------------------------------
+  // Incremental chapter refresh (Tachiyomi-style)
+  // Fetch ONLY the newest chapters in a single request so the app can diff
+  // against its local store instead of crawling every page again. The host
+  // passes `knownCount` (chapters already stored) but we don't strictly need it:
+  // ORDER desc + per_page 100 always returns the newest 100, and the app inserts
+  // only the URLs it doesn't already have.
+  // ---------------------------------------------------------------
+  fetchLatestChapters: async function (novelUrl, knownCount, ctx) {
+    var fullUrl = this._absUrl(novelUrl);
+    var res = await _fetchCachedPage(fullUrl, ctx);
+    if (!res.ok) throw new Error('فشل جلب أحدث الفصول: ' + res.status);
+    var html = res.text;
+
+    // Fallback: whatever chapter rows shipped inline (usually the last ~8).
+    var fallbackChapters = this._parseChapterRows(html);
+    var props = this._nhvProps(html);
+    if (!props) return this._finalizeChapters(fallbackChapters);
+
+    var nonce = props.chaptersNonce;
+    var nonceRefreshed = false;
+    var sleep = function (ms) { return new Promise(function (res) { setTimeout(res, ms); }); };
+
+    if (!nonce) {
+      var ref0 = await this._ajaxPost(props.ajaxUrl, { action: 'nhv_refresh_front_nonces' }, ctx);
+      var refJ0 = this._parseAjaxJson(ref0);
+      if (refJ0.data && refJ0.data.chapters_nonce) {
+        nonce = refJ0.data.chapters_nonce;
+      }
+    }
+
+    // Single request, newest first. Usually this is the ONLY network call.
+    var pageRes = null;
+    for (var attempt = 0; attempt < 5; attempt++) {
+      var r = await this._ajaxPost(props.ajaxUrl, {
+        action: 'nhv_manga_single_chapters_page',
+        nonce: nonce,
+        manga_id: props.postId,
+        volume: '-1',
+        page: '1',
+        per_page: '100',
+        order: 'desc'
+      }, ctx);
+      if (r.status === 403 && !nonceRefreshed) {
+        var ref = await this._ajaxPost(props.ajaxUrl, { action: 'nhv_refresh_front_nonces' }, ctx);
+        var refJ = this._parseAjaxJson(ref);
+        if (refJ.data && refJ.data.chapters_nonce) {
+          nonce = refJ.data.chapters_nonce;
+          nonceRefreshed = true;
+        }
+        continue;
+      }
+      if (r.status === 403 || r.status === 429 || r.status === 503 || !r.ok) {
+        await sleep(700 * (attempt + 1));
+        continue;
+      }
+      pageRes = this._parseAjaxJson(r);
+      break;
+    }
+
+    if (!pageRes || !pageRes.html) return this._finalizeChapters(fallbackChapters);
+
+    var latestChapters = this._parseChapterRows(pageRes.html);
+    if (latestChapters.length === 0) return this._finalizeChapters(fallbackChapters);
+
+    return this._finalizeChapters(latestChapters);
   },
 
   // ---------------------------------------------------------------

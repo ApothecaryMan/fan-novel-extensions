@@ -40,7 +40,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.7.1',
+  version: '1.7.2',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -126,7 +126,7 @@ registerExtension({
     var raw = (name || '').trim();
     var m = raw;
     m = m.replace(/^["«“']+|["»”']+$/g, '');
-    m = m.replace(/^(?:chapter|ch\.?|فصل|الفصل)\s*(\d+(?:\.\d+)?)\s*(?:[-–—:.#|]\s*)?/i, '');
+    m = m.replace(/^(?:chapter|ch\.?|فصل|الفصل)\s*(?:الـ)?\s*(\d+(?:\.\d+)?)\s*(?:[-–—:.#|]\s*)?/i, '');
     if (m !== raw) return m.replace(/["«»“”'´`^]/g, '').trim();
     m = m.replace(/^(?:فصل|الفصل)\s*(?:الأول|الثاني|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر)\s*(?:[:|.\-–—]?\s*)/i, '');
     m = m.replace(/^(?:فصل|الفصل)\s*[:|.\-–—]\s*/i, '');
@@ -231,22 +231,56 @@ registerExtension({
   },
 
   // Read a JSON object from an AJAX response regardless of how the host shapes it.
-  // Some runtimes populate a pre-parsed `.json`/`.data`/`.body`, others return the raw
-  // JSON string in `.text`. Never throw on a non-JSON payload (e.g. a bot/anti-bot HTML
-  // challenge) — fall back to the provided default so the caller degrades gracefully
-  // instead of aborting the whole chapter list.
+  // Reader runtimes expose the fetched body under different keys (.text, .json,
+  // .body, .data) and some auto-decode JSON so the response object IS the payload.
+  // We try every realistic container and, if none holds an object, JSON.parse() the
+  // raw string. Never throw on a non-JSON payload (e.g. an anti-bot HTML challenge) —
+  // fall back to `def` so callers degrade gracefully.
   _parseAjaxJson: function (res, def) {
     def = def || {};
     if (!res) return def;
-    if (res.json && typeof res.json === 'object') return res.json;
-    if (res.body && typeof res.body === 'object' && res.body !== def) return res.body;
+    for (var key of ['json', 'body', 'data']) {
+      var holder = res[key];
+      if (holder && typeof holder === 'object') {
+        if (key !== 'body' || holder !== def) return holder;
+      } else if (typeof holder === 'string') {
+        var p1 = this._tryJsonParse(holder);
+        if (p1 !== undefined) return p1;
+      }
+    }
+    if (typeof res.text === 'string') {
+      var p2 = this._tryJsonParse(res.text);
+      if (p2 !== undefined) return p2;
+    }
+    // The response object itself may BE the decoded payload (e.g. {ok,status,success,html,total}).
+    if (typeof res === 'object' && ('success' in res || 'html' in res || 'data' in res)) {
+      return res;
+    }
     var raw = res.json !== undefined ? res.json : res.text;
-    if (typeof raw !== 'string') return def;
+    if (typeof raw === 'string') {
+      var p3 = this._tryJsonParse(raw);
+      if (p3 !== undefined) return p3;
+    }
+    return def;
+  },
+
+  _tryJsonParse: function (raw) {
+    if (typeof raw !== 'string') return undefined;
     try {
       var parsed = JSON.parse(raw);
-      return parsed && typeof parsed === 'object' ? parsed : def;
+      return parsed && typeof parsed === 'object' ? parsed : undefined;
     } catch (e) {
-      return def;
+      return undefined;
+    }
+  },
+
+  // Wrap network calls so a genuine exception (not an HTTP status) becomes a clear
+  // Error instead of an unhandled rejection (consistent with site:kolnovel).
+  _safeFetch: async function (urlOrOpts, ctx, label) {
+    try {
+      return await ctx.xFetch(urlOrOpts);
+    } catch (e) {
+      throw new Error((label || 'فشل الاتصال') + ': ' + (e && e.message ? e.message : String(e)));
     }
   },
 
@@ -290,7 +324,7 @@ registerExtension({
       var rawTitle = this._decodeEntities(this._stripTags(linkMatch[2]));
       var cleanTitle = this._toLatinDigits(rawTitle);
 
-      var numMatch = cleanTitle.match(/(?:الفصل|فصل|Chapter|Ch\.?)\s*(\d+(?:\.\d+)?)/i);
+      var numMatch = cleanTitle.match(/(?:الفصل|فصل|Chapter|Ch\.?)\s*(?:الـ)?\s*(\d+(?:\.\d+)?)/i);
       var chapterNumber = numMatch ? parseFloat(numMatch[1]) : 0;
       if (!chapterNumber) {
         var numFallback = cleanTitle.match(/(\d+(?:\.\d+)?)/);
@@ -544,40 +578,25 @@ registerExtension({
       }
     }
 
-    // Single request, newest first. Usually this is the ONLY network call.
-    var pageRes = null;
-    for (var attempt = 0; attempt < 5; attempt++) {
-      var r = await this._ajaxPost(props.ajaxUrl, {
-        action: 'nhv_manga_single_chapters_page',
-        nonce: nonce,
-        manga_id: props.postId,
-        volume: '-1',
-        page: '1',
-        per_page: '100',
-        order: 'desc'
-      }, ctx);
-      if (r.status === 403 && !nonceRefreshed) {
-        var ref = await this._ajaxPost(props.ajaxUrl, { action: 'nhv_refresh_front_nonces' }, ctx);
-        var refJ = this._parseAjaxJson(ref);
-        if (refJ.data && refJ.data.chapters_nonce) {
-          nonce = refJ.data.chapters_nonce;
-          nonceRefreshed = true;
-        }
-        continue;
-      }
-      if (r.status === 403 || r.status === 429 || r.status === 503 || !r.ok) {
-        await sleep(700 * (attempt + 1));
-        continue;
-      }
-      pageRes = this._parseAjaxJson(r);
-      // WordPress admin-ajax wraps the payload as {success, data:{html,total,...}}.
-      // Unwrap it so pageRes.html is read directly (same as parseChapterList).
-      if (pageRes && pageRes.data && typeof pageRes.data === 'object' && pageRes.data.html) {
-        pageRes = pageRes.data;
-      }
-      break;
-    }
+    // Fetch page 1 just to learn the exact last page: cenele's server IGNORES the
+    // `order` param and always returns ascending chapters, so the NEWEST chapters
+    // live on the LAST page — NOT on `order:desc` page 1 (which would hand back the
+    // oldest 100 and make the app miss every recent release).
+    var first = await this._fetchChapterListPage(props, '1', nonce, nonceRefreshed, ctx, sleep);
+    nonce = first ? first.nonce : nonce;
+    nonceRefreshed = first ? first.nonceRefreshed : nonceRefreshed;
+    var firstRes = first ? first.pageRes : null;
+    if (!firstRes || !firstRes.html) return this._finalizeChapters(fallbackChapters);
 
+    var total = parseInt(firstRes.total, 10) || 0;
+    var perPageN = parseInt(firstRes.per_page, 10) || 100;
+    var lastPage = total > 0 ? Math.ceil(total / perPageN) : (firstRes.has_more ? 2 : 1);
+
+    var lastRes = first;
+    if (lastPage > 1) {
+      lastRes = await this._fetchChapterListPage(props, String(lastPage), nonce, nonceRefreshed, ctx, sleep);
+    }
+    var pageRes = lastRes ? lastRes.pageRes : null;
     if (!pageRes || !pageRes.html) return this._finalizeChapters(fallbackChapters);
 
     var latestChapters = this._parseChapterRows(pageRes.html);
@@ -586,14 +605,59 @@ registerExtension({
     return this._finalizeChapters(latestChapters);
   },
 
+  // Fetch a single chapter-list page (admin-ajax) with retry + nonce refresh, and
+  // return { pageRes, nonce, nonceRefreshed } so callers can thread the nonce forward.
+  _fetchChapterListPage: async function (props, pageNum, nonce, nonceRefreshed, ctx, sleep) {
+    var state = { nonce: nonce, nonceRefreshed: nonceRefreshed || false };
+    var pageRes = null;
+    for (var attempt = 0; attempt < 5; attempt++) {
+      var r = await this._ajaxPost(props.ajaxUrl, {
+        action: 'nhv_manga_single_chapters_page',
+        nonce: state.nonce,
+        manga_id: props.postId,
+        volume: '-1',
+        page: String(pageNum),
+        per_page: '100'
+      }, ctx);
+      if (r.status === 403 && !state.nonceRefreshed) {
+        var ref = await this._ajaxPost(props.ajaxUrl, { action: 'nhv_refresh_front_nonces' }, ctx);
+        var refJ = this._parseAjaxJson(ref);
+        if (refJ.data && refJ.data.chapters_nonce) {
+          state.nonce = refJ.data.chapters_nonce;
+          state.nonceRefreshed = true;
+        }
+        continue;
+      }
+      if (r.status === 403 || r.status === 429 || r.status === 503 || !r.ok) {
+        await sleep(700 * (attempt + 1));
+        continue;
+      }
+      pageRes = this._parseAjaxJson(r);
+      // Some host versions wrap the payload as {success, data:{html,total,...}};
+      // unwrap so the caller can read .html directly. (The live site returns these
+      // at top level, which parseAjaxJson already surfaces.)
+      if (pageRes && pageRes.data && typeof pageRes.data === 'object' && pageRes.data != null) {
+        pageRes = pageRes.data;
+      }
+      break;
+    }
+    return pageRes ? { pageRes: pageRes, nonce: state.nonce, nonceRefreshed: state.nonceRefreshed } : null;
+  },
+
   // ---------------------------------------------------------------
   // Chapter body
   // ---------------------------------------------------------------
   parseChapterContent: async function (chapterUrl, ctx) {
-    var res = await ctx.xFetch(this._absUrl(chapterUrl));
+    var res = await this._safeFetch(this._absUrl(chapterUrl), ctx, 'فشل جلب نص الفصل');
     if (!res.ok) throw new Error('فشل جلب نص الفصل: ' + res.status);
     var html = res.text;
-    var panelMatch = html.match(/<reading-panel[^>]*>([\s\S]*?)<\/reading-panel>/i) ||
+    // Real cenele lays the body out inside a custom <novel-chapter> element (a set of
+    // <p> blocks), wrapped by a <div id="chapter-...">. Try, in order: <novel-chapter>,
+    // the actual reading-content div (has "current" / id="chapter-"), then a generic
+    // reading-content div (last resort — do NOT match the reading-content-WRAP only).
+    var panelMatch = html.match(/<novel-chapter[^>]*>([\s\S]*?)<\/novel-chapter>/i) ||
+                     html.match(/<div[^>]*\bid="chapter-[^"]*"[^>]*class="[^"]*reading-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i) ||
+                     html.match(/<div[^>]*class="[^"]*reading-content[^"]*\bcurrent\b[^"]*"[^>]*>([\s\S]*?)<\/div>/i) ||
                      html.match(/<div[^>]*class="[^"]*reading-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
     if (!panelMatch) throw new Error('تعذر العثور على نص الفصل');
 
@@ -602,6 +666,12 @@ registerExtension({
     rawContent = rawContent.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
     rawContent = rawContent.replace(/<blockquote[^>]*>[\s\S]*?<\/blockquote>/gi, '');
     rawContent = rawContent.replace(/<aside[^>]*>[\s\S]*?<\/aside>/gi, '');
+    // Drop the per-chapter metadata header (chapter name, translator, date, word count,
+    // reading progress) that precedes the actual narrative.
+    rawContent = rawContent.replace(/<div[^>]*class="[^"]*nhv-reading-chapter-head[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '');
+    // Remove ad blocks by class, but only when "ad" is a whole token (word) in the
+    // class/value — NOT a sub-string in classes like shadow/reader/gradient/badge.
+    rawContent = rawContent.replace(/<div[^>]*class="[^"]*\bad\b[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '');
 
     var paragraphs = [];
     // cenele lays the chapter body out in block elements (mostly <div>, sometimes
@@ -625,11 +695,14 @@ registerExtension({
       // and keep whatever name follows. Already-prefixed headings become empty and are skipped.
       text = text.replace(/^\s*(?:chapter|ch\.?)\s*\d+(?:\s*[:.—|-]\s*|\s+|$)/i, '').trim();
       text = text.replace(/^\s*(?:فصل|الفصل)\s*\d+(?:\s*[:.—|-]\s*|\s+|$)/i, '').trim();
+      text = text.replace(/^\s*(?:فصل|الفصل)\s+(?:الـ|ال|رقم|عدد)\s*\d+(?:\s*[:.—|-]\s*|\s+|$)/i, '').trim();
       // Arabic word-number headings (اول..عاشر, 11-19, 20-90 و ...) + optional name.
       // NOTE: 11-19 composites (الثاني عشر/الثالث عشر...) MUST be handled before the
       // standalone ones (الثالث) or the tens "عشر" gets left as junk.
       text = text.replace(/^\s*(?:فصل|الفصل)\s+(?:الحادي|الثانية?|الثانية?)?\s*عشر(?:اء)?\s*[:.—|-]?\s*/i, '').trim();
       text = text.replace(/^\s*(?:فصل|الفصل)\s+(?:الأول|الثاني|الثالث|الرابع|الخامس)\s+عشر\s*[:.—|-]?\s*/i, '').trim();
+      // Teens 16-19 (السادس عشر .. العاشر عشر)
+      text = text.replace(/^\s*(?:فصل|الفصل)\s+(?:السادس|السابع|الثامن|التاسع|العاشر)\s+عشر\s*[:.—|-]?\s*/i, '').trim();
       text = text.replace(/^\s*(?:فصل|الفصل)\s+(?:الأول|الثاني|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر)\s*[:.—|-]?\s*/i, '').trim();
       text = text.replace(/^\s*(?:فصل|الفصل)\s+(?:عشرون|ثلاثون|أربعون|خمسون|ستون|سبعون|ثمانون|تسعون)\s*[:.—|-]?\s*/i, '').trim();
       if (!text) continue;
@@ -655,7 +728,7 @@ registerExtension({
       url = this._absUrl('/?s=' + encodeURIComponent(query.trim()) + '&post_type=wp-manga' + (pageNum > 1 ? '&paged=' + pageNum : ''));
     }
 
-    var res = await ctx.xFetch(url);
+    var res = await this._safeFetch(url, ctx, 'فشل البحث');
     if (!res.ok) return [];
     var html = res.text;
     var results = [];
@@ -663,7 +736,9 @@ registerExtension({
     // Grid cards (browse + genre/search pages that use nhv-library-card)
     // Reuse the shared nhv-library-card parser that extracts multi-genre tags.
     var nhvResults = this._parseNhvCards(html);
-    for (var i = 0; i < nhvResults.length; i++) results.push(nhvResults[i]);
+    for (var i = 0; i < nhvResults.length; i++) {
+      results.push(nhvResults[i]);
+    }
 
     // Fallback: standard madara c-tabs-item rows (real search results / ?s=...&post_type=wp-manga)
     if (results.length === 0) {
@@ -714,7 +789,7 @@ registerExtension({
   // Parse the genre list from the /cont/ browse page:
   //   .genres__collapse > .row.genres > ul > li > a[href="/cont-genre/<slug>/"]
   getCategories: async function (ctx) {
-    var res = await ctx.xFetch(this._absUrl('/cont/') + '?m_orderby=views');
+    var res = await this._safeFetch(this._absUrl('/cont/') + '?m_orderby=views', ctx, 'فشل جلب التصنيفات');
     if (!res.ok) return [];
     var html = res.text;
     var categories = [];
@@ -744,7 +819,7 @@ registerExtension({
     var url = this._absUrl('/cont-genre/' + encodeURIComponent(slug) + '/');
     if (pageNum > 1) url += 'page/' + pageNum + '/';
     url += '?m_orderby=latest';
-    var res = await ctx.xFetch(url);
+    var res = await this._safeFetch(url, ctx, 'فشل جلب صفحة التصنيف');
     if (!res.ok) return [];
     return this._parseNhvCards(res.text);
   },
@@ -754,6 +829,7 @@ registerExtension({
   // ---------------------------------------------------------------
   _parseNhvCards: function (html) {
     var results = [];
+    var seen = {};
     var cardRegex = /<article class="nhv-library-card">([\s\S]*?)<\/article>/gi;
     var cardMatch;
     while ((cardMatch = cardRegex.exec(html)) !== null) {
@@ -762,6 +838,8 @@ registerExtension({
                       cardBlock.match(/<a class="nhv-library-card__cover" href="([^"]+)"[^>]*aria-label="([^"]*)"/i);
       if (!linkMatch) continue;
       var novelUrl = linkMatch[1].trim();
+      if (seen[novelUrl]) continue;
+      seen[novelUrl] = true;
       var title = this._decodeEntities((linkMatch[2] || '').trim());
 
       var coverMatch = cardBlock.match(/<img[^>]+src="([^">]+)"/i);
@@ -792,7 +870,7 @@ registerExtension({
       var status = statusMatch ? statusMatch[1].trim() : 'مستمرة';
 
       results.push({
-        source: 'site:cenele',
+        source: this.id,
         url: novelUrl,
         title: title,
         coverUrl: coverUrl,

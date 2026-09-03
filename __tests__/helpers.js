@@ -52,3 +52,29 @@ export function mockCtx(routes = {}) {
 export function ok(html, status = 200) {
   return { ok: true, status, text: html };
 }
+
+/**
+ * Build a mock ctx for cenele-style extensions that issue GET page fetches AND
+ * POST admin-ajax calls.
+ *
+ * @param {Object<string, Function|Object>} routes   GET routes: URL substring -> response.
+ * @param {Function} [ajaxHandler]  (params:URLSearchParams, urlOrOpts) -> response, called
+ *        for every POST. If omitted, POSTs return 404.
+ */
+export function mockCeneleCtx(routes = {}, ajaxHandler) {
+  return {
+    xFetch: async (urlOrOpts) => {
+      if (typeof urlOrOpts !== 'string') {
+        if (!ajaxHandler) return { ok: false, status: 404, text: '{}' };
+        const params = new URLSearchParams(urlOrOpts.body || '');
+        return ajaxHandler(params, urlOrOpts);
+      }
+      for (const [pattern, res] of Object.entries(routes)) {
+        if (urlOrOpts.includes(pattern)) {
+          return typeof res === 'function' ? res(urlOrOpts) : res;
+        }
+      }
+      return { ok: false, status: 404, text: '' };
+    }
+  };
+}

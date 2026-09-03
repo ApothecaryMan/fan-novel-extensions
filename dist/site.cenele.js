@@ -40,7 +40,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.6.3',
+  version: '1.6.4',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -250,14 +250,32 @@ registerExtension({
     }
   },
 
+  // Resolve the values the chapter AJAX needs (postId, chaptersNonce, ajaxUrl).
+  // Preferred source is the inline `nhvNovelV2` script object, but some hosts strip
+  // <script> blocks entirely from page HTML (which also removes that object and made
+  // chapter lists silently fall back to the 8-chapter preview). postId is also present
+  // in the <body> class (`postid-<N>`) and the shortlink, and ajaxUrl is effectively a
+  // constant, so we recover both from non-script markup. chaptersNonce is left out when
+  // the script is gone and is then refreshed via `nhv_refresh_front_nonces`.
   _nhvProps: function (html) {
+    var postId, chaptersNonce, ajaxUrl;
     var idx = html.indexOf('nhvNovelV2');
-    if (idx === -1) return null;
-    var region = html.slice(Math.max(0, idx), Math.min(html.length, idx + 1600));
-    var postId = (region.match(/"postId"\s*:\s*"(\d+)"/) || [])[1];
-    var chaptersNonce = (region.match(/"chaptersNonce"\s*:\s*"([^"]+)"/) || [])[1];
-    var ajaxUrl = (region.match(/"ajaxurl"\s*:\s*"([^"]+)"/) || [])[1];
-    if (!postId || !chaptersNonce || !ajaxUrl) return null;
+    if (idx !== -1) {
+      var region = html.slice(Math.max(0, idx), Math.min(html.length, idx + 1600));
+      postId = (region.match(/"postId"\s*:\s*"(\d+)"/) || [])[1];
+      chaptersNonce = (region.match(/"chaptersNonce"\s*:\s*"([^"]+)"/) || [])[1];
+      ajaxUrl = (region.match(/"ajaxurl"\s*:\s*"([^"]+)"/) || [])[1];
+    }
+    if (!postId) {
+      var bodyId = (html.match(/<body[^>]*class="[^"]*\bpostid-(\d+)\b/i) || [])[1];
+      var shortLink = (html.match(/<link[^>]+rel=['"]shortlink['"][^>]*\?p=(\d+)/i) || [])[1];
+      postId = bodyId || shortLink;
+    }
+    if (!ajaxUrl) {
+      ajaxUrl = (html.match(/data-nhv-track-url="([^"]+)"/i) || [])[1] ||
+                this.baseUrl + '/wp-admin/admin-ajax.php';
+    }
+    if (!postId || !ajaxUrl) return null;
     return { postId: postId, chaptersNonce: chaptersNonce, ajaxUrl: ajaxUrl };
   },
 
@@ -372,6 +390,16 @@ registerExtension({
     var nonce = props.chaptersNonce;
     var nonceRefreshed = false;
     var sleep = function (ms) { return new Promise(function (res) { setTimeout(res, ms); }); };
+
+    // When the page's <script> (nhvNovelV2) was stripped by the host, chaptersNonce is
+    // absent — obtain a fresh one before paginating.
+    if (!nonce) {
+      var ref0 = await this._ajaxPost(props.ajaxUrl, { action: 'nhv_refresh_front_nonces' }, ctx);
+      var refJ0 = this._parseAjaxJson(ref0);
+      if (refJ0.data && refJ0.data.chapters_nonce) {
+        nonce = refJ0.data.chapters_nonce;
+      }
+    }
 
     // Fetch page 1 with volume: '-1' (covers all volumes seamlessly and provides exact total)
     var page1Res = null;

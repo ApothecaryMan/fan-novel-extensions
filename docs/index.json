@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1788445354603,
+  "generatedAt": 1788447164612,
   "extensions": [
     {
       "id": "site:cenele",
@@ -19,8 +19,8 @@
       "lang": "ar",
       "version": "1.5.0",
       "apiVersion": 1,
-      "size": 32607,
-      "sha256": "ce1d19eb0d6d6993cfe70271b848c7fc40bad9461279f072d966cfaff07f8138",
+      "size": 32710,
+      "sha256": "edaf8a7393b6b40d0618a8b343c06dd65271684e1cf787ced1fb320600173973",
       "url": "site.kolnovel.js",
       "baseUrl": "https://kolnovel.com"
     },
@@ -36,5 +36,5 @@
       "baseUrl": "https://novelfull.com"
     }
   ],
-  "signature": "CT3Nh-4iKJUcvSseIDTqIfkynXLK51GNwnwawdOKnN5R_z5FAyj_EGpyYK1o6FZJOVjbtk_zzZzJgikDfQXvBg"
+  "signature": "Sq1xozJDk-HJzVLPcvY1F-lFwGGESM0YvehRy6Xc325BGXdoTfASgko3B-wXzgDbpTFpfnmmFC-_WjmS4Bn3BQ"
 }

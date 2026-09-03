@@ -556,7 +556,8 @@ registerExtension({
     }
 
     // Strategy 3: .hotoday items (trending section)
-    var hotRegex = /<div[^>]*class="[^"]*hotoday[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi;
+    // Each .hotoday block holds one item; capture until the next block or end.
+    var hotRegex = /<div[^>]*class="[^"]*hotoday[^"]*"[^>]*>([\s\S]*?)(?=<div[^>]*class="[^"]*hotoday[^"]*"|$)/gi;
     var hotMatch;
     while ((hotMatch = hotRegex.exec(html)) !== null) {
       var hotBlock = hotMatch[1];

@@ -8,9 +8,14 @@
     "generate-keys": "node scripts/generate-keys.mjs",
     "build": "node scripts/build-index.mjs",
     "build:sign": "node scripts/build-index.mjs --sign",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "postinstall": "node scripts/install-hooks.mjs"
   },
   "dependencies": {
     "@noble/curves": "^1.4.0"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.0"
   }
 }

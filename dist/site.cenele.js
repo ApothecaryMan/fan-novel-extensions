@@ -11,6 +11,7 @@
 var _htmlCache = Object.create(null); // url -> { res, ts }
 var _HTML_CACHE_TTL_MS = 3 * 60 * 1000;
 var _HTML_CACHE_CAP = 8;
+var _inFlight = Object.create(null); // url -> Promise<res>
 
 function _fetchCachedPage(url, ctx) {
   var now = Date.now();
@@ -18,7 +19,11 @@ function _fetchCachedPage(url, ctx) {
   if (hit && (now - hit.ts) < _HTML_CACHE_TTL_MS) {
     return Promise.resolve(hit.res);
   }
-  return ctx.xFetch(url).then(function (res) {
+  if (_inFlight[url]) {
+    return _inFlight[url];
+  }
+  var p = ctx.xFetch(url).then(function (res) {
+    delete _inFlight[url];
     if (res && res.ok) {
       _htmlCache[url] = { res: res, ts: now };
       // Evict the oldest entry beyond the cap so the module cache stays bounded
@@ -31,16 +36,26 @@ function _fetchCachedPage(url, ctx) {
         }
         delete _htmlCache[oldest];
       }
+    } else if (res && res.status === 404) {
+      // Retain 404 briefly (30s) so concurrent or immediate sequential calls
+      // (like parseNovelInfo followed by parseChapterList) reuse the response
+      // without firing redundant network requests against a dead endpoint.
+      _htmlCache[url] = { res: res, ts: now - _HTML_CACHE_TTL_MS + 30000 };
     }
     return res;
+  }).catch(function (err) {
+    delete _inFlight[url];
+    throw err;
   });
+  _inFlight[url] = p;
+  return p;
 }
 
 registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.7.2',
+  version: '1.7.3',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 

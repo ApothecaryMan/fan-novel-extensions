@@ -34,6 +34,7 @@ export function loadExtension(filename) {
  */
 export function mockCtx(routes = {}) {
   return {
+    log: () => {},
     xFetch: async (urlOrOpts) => {
       const url = typeof urlOrOpts === 'string' ? urlOrOpts : urlOrOpts.url;
       for (const [pattern, res] of Object.entries(routes)) {
@@ -63,6 +64,7 @@ export function ok(html, status = 200) {
  */
 export function mockCeneleCtx(routes = {}, ajaxHandler) {
   return {
+    log: () => {},
     xFetch: async (urlOrOpts) => {
       if (typeof urlOrOpts !== 'string') {
         if (!ajaxHandler) return { ok: false, status: 404, text: '{}' };

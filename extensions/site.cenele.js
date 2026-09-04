@@ -5,14 +5,20 @@
 // served lazily over the site's WordPress admin-ajax endpoint
 // (nhv_manga_single_chapters_page). We fetch the page once (shared between
 // parseNovelInfo and parseChapterList via a bounded module cache), then paginate
-// the AJAX endpoint with bounded concurrency.
+// the AJAX endpoint SEQUENTIALLY with human-like pacing.
 //
-// Design notes (why this is lean):
+// Design notes (why this is lean AND survives Cloudflare rate limits):
 //   - ONE AJAX page-driver serves both the full list and the incremental
 //     "latest chapters" path, so there is no duplicated fetch logic.
-//   - A single npm-agnostic `ctx.xFetch` bridge; the sandbox never opens sockets.
-//   - The 403/429 anti-bot path is handled with retry + backoff + nonce refresh
-//     in ONE place instead of being copy-pasted three times.
+//   - Requests match the site's OWN frontend: X-Requested-With + Origin +
+//     Referer on every admin-ajax POST (what Madara's jQuery sends).
+//   - Pages are crawled one-at-a-time with a jittered delay. Parallel bursts
+//     from a phone trigger Cloudflare's per-IP throttle on this Madara fork
+//     (403s) and degrade the list to the inline ~8 fallback — sequential
+//     pacing stays under it.
+//   - 403/429/503 → retry with backoff + nonce refresh in ONE place.
+//   - Every failure is logged with ctx.log so on-device behavior is visible
+//     (DevTools → Extension Method Runner).
 
 var _htmlCache = Object.create(null); // url -> { res, ts }
 var _HTML_TTL_MS = 3 * 60 * 1000;
@@ -55,7 +61,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.8.0',
+  version: '1.9.0',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -178,17 +184,30 @@ registerExtension({
   },
 
   // POST form-encoded data to the site's admin-ajax endpoint via the host bridge.
-  _ajaxPost: function (url, data, ctx) {
+  // Mirrors what the site's OWN Madara frontend sends (jQuery $.ajax): the
+  // X-Requested-With + Origin + Referer trio is what real browsers attach to
+  // every admin-ajax call, and WordPress/Cloudflare rules commonly key off it.
+  // Hosts that strip forbidden headers (Referer/Origin) simply drop them — the
+  // remaining headers still match the site's first-party requests.
+  _ajaxPost: function (url, data, ctx, referer) {
     var body = [];
     for (var k in data) {
       if (Object.prototype.hasOwnProperty.call(data, k)) {
         body.push(encodeURIComponent(k) + '=' + encodeURIComponent(String(data[k])));
       }
     }
+    var origin = url.replace(/^([a-z][a-z0-9+.-]*:\/\/[^\/]+).*$/i, '$1');
+    var headers = {
+      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+      'X-Requested-With': 'XMLHttpRequest',
+      Accept: 'application/json, text/javascript, */*; q=0.01',
+      Origin: origin
+    };
+    if (referer) headers.Referer = referer;
     return ctx.xFetch({
       url: url,
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+      headers: headers,
       body: body.join('&')
     });
   },
@@ -260,9 +279,11 @@ registerExtension({
   },
 
   // Fetch one chapter-list page with retry + backoff + nonce refresh.
-  // Returns the unwrapped JSON payload, or null when un-fetchable.
+  // Never throws: returns the unwrapped JSON payload, or null when un-fetchable.
+  // Every failed attempt is logged via ctx.log so on-device failures (the
+  // chronic 403/429 Cloudflare throttle) finally become visible in DevTools.
   _fetchChapterPage: async function (props, pageNum, ctx, state) {
-    for (var attempt = 0; attempt < 5; attempt++) {
+    for (var attempt = 0; attempt < 6; attempt++) {
       var r = await this._ajaxPost(props.ajaxUrl, {
         action: 'nhv_manga_single_chapters_page',
         nonce: state.nonce,
@@ -270,9 +291,10 @@ registerExtension({
         volume: '-1',
         page: String(pageNum),
         per_page: '100'
-      }, ctx);
+      }, ctx, state.referer);
       if (r.status === 403 && !state.nonceRefreshed) {
-        var refJ = this._parseAjaxJson(await this._ajaxPost(props.ajaxUrl, { action: 'nhv_refresh_front_nonces' }, ctx));
+        ctx.log('info', 'cenele: 403 on page', pageNum, '- refreshing nonce');
+        var refJ = this._parseAjaxJson(await this._ajaxPost(props.ajaxUrl, { action: 'nhv_refresh_front_nonces' }, ctx, state.referer));
         if (refJ.data && refJ.data.chapters_nonce) {
           state.nonce = refJ.data.chapters_nonce;
           state.nonceRefreshed = true;
@@ -280,7 +302,9 @@ registerExtension({
         continue;
       }
       if (r.status === 403 || r.status === 429 || r.status === 503 || !r.ok) {
-        await _sleep(700 * (attempt + 1));
+        ctx.log('warn', 'cenele: page', pageNum, 'attempt', attempt + 1, '→ HTTP', r.status,
+          '· retrying in', 500 * (attempt + 1) + '+jitter', 'ms');
+        await _sleep(500 * (attempt + 1) + Math.floor(Math.random() * 300));
         continue;
       }
       var page = this._parseAjaxJson(r);
@@ -301,11 +325,18 @@ registerExtension({
 
   // Fetch the requested chapter-list pages. `onlyLast` fetches just the final
   // page (incremental path); otherwise every page up to the total is fetched
-  // with bounded concurrency. Returns ChapterMeta[] from the page HTML.
-  _loadChapters: async function (html, ctx, onlyLast) {
+  // SEQUENTIALLY with a small jittered delay between requests.
+  //
+  // Why sequential: this Madara fork protects admin-ajax with Cloudflare
+  // rate-limit rules that are keyed to parallel request bursts from a single
+  // client. The site's own frontend paces one request at a time; fan-out
+  // (parallel) crawls from a phone trigger 403s and degrade the list to the
+  // inline ~8-row fallback. Sequential + jitter stays under that throttle and
+  // is still fast (~10 pages ≈ a few seconds on mobile).
+  _loadChapters: async function (html, ctx, onlyLast, referer) {
     var props = this._nhvProps(html);
     if (!props) return null;
-    var state = { nonce: props.chaptersNonce, nonceRefreshed: false };
+    var state = { nonce: props.chaptersNonce, nonceRefreshed: false, referer: referer || null };
     await this._ensureNonce(props, ctx, state);
 
     var first = await this._fetchChapterPage(props, 1, ctx, state);
@@ -318,36 +349,34 @@ registerExtension({
     if (onlyLast) {
       // Incremental: yield ONLY the newest chapters (last page). The server
       // ignores `order`, so the newest live on the final page — page 1 is only
-      // fetched to learn the exact total/last page.
+      // fetched to learn the exact total/last page. If the last page fails,
+      // return nothing so the caller's full-refresh fallback takes over.
       if (lastPage > 1) {
         var last = await this._fetchChapterPage(props, lastPage, ctx, state);
-        pageHtmls.push((last || first).html);
+        if (last) pageHtmls.push(last.html);
       } else {
         pageHtmls.push(first.html);
       }
     } else {
       pageHtmls = [first.html];
-      var pages = [];
-      for (var p = 2; p <= lastPage; p++) pages.push(p);
-      var idx = 0;
-      var collected = [];
-      var worker = async () => {
-        while (idx < pages.length) {
-          var cur = pages[idx++];
-          var ph = await this._fetchChapterPage(props, cur, ctx, state);
-          if (ph) collected.push(ph.html);
+      var missing = [];
+      for (var p = 2; p <= lastPage; p++) {
+        await _sleep(180 + Math.floor(Math.random() * 260)); // human-ish pacing
+        var ph = await this._fetchChapterPage(props, p, ctx, state);
+        if (ph) {
+          pageHtmls.push(ph.html);
+        } else {
+          missing.push(p);
         }
-      };
-      var workers = [];
-      for (var w = 0; w < Math.min(4, pages.length); w++) workers.push(worker());
-      await Promise.all(workers);
-      pageHtmls = pageHtmls.concat(collected);
+      }
+      if (missing.length) ctx.log('warn', 'cenele: failed to fetch pages', missing.join(','), 'of', lastPage);
     }
 
     var all = [];
     pageHtmls.forEach(function (pageHtml) {
       this._parseChapterRows(pageHtml).forEach(function (ch) { all.push(ch); });
     }, this);
+    ctx.log('info', 'cenele: crawled', all.length, 'chapters across', pageHtmls.length, 'of', lastPage, 'pages');
     return all.length ? this._finalizeChapters(all) : null;
   },
 
@@ -435,8 +464,12 @@ registerExtension({
     var fullUrl = this._absUrl(novelUrl);
     var res = await _fetchCached(fullUrl, ctx);
     if (!res.ok) throw new Error('فشل جلب قائمة الفصول: ' + res.status);
-    var chapters = await this._loadChapters(res.text, ctx, false);
-    return chapters || this._finalizeChapters(this._parseChapterRows(res.text));
+    var chapters = await this._loadChapters(res.text, ctx, false, fullUrl);
+    if (chapters) return chapters;
+    // Every AJAX page failed (on-device 403/429 throttle): fall back to the
+    // server-rendered inline rows so the novel still opens with SOME chapters.
+    ctx.log('warn', 'cenele: AJAX crawl failed, falling back to inline rows');
+    return this._finalizeChapters(this._parseChapterRows(res.text));
   },
 
   // -------------------------------------------------- incremental refresh
@@ -444,7 +477,7 @@ registerExtension({
     var fullUrl = this._absUrl(novelUrl);
     var res = await _fetchCached(fullUrl, ctx);
     if (!res.ok) throw new Error('فشل جلب أحدث الفصول: ' + res.status);
-    var chapters = await this._loadChapters(res.text, ctx, true);
+    var chapters = await this._loadChapters(res.text, ctx, true, fullUrl);
     return chapters || this._finalizeChapters(this._parseChapterRows(res.text));
   },
 

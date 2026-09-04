@@ -65,15 +65,25 @@ export function ok(html, status = 200) {
 export function mockCeneleCtx(routes = {}, ajaxHandler) {
   return {
     log: () => {},
-    xFetch: async (urlOrOpts) => {
-      if (typeof urlOrOpts !== 'string') {
+    // Mirrors the REAL host bridge (WebViewRuntime ctx.xFetch): url from the
+    // first arg (string OR object.url); init from the second arg, with a
+    // fallback to the object form for legacy single-object calls.
+    xFetch: async (input, idInit) => {
+      const url = typeof input === 'string' ? input : (input && input.url);
+      const init =
+        idInit && typeof idInit === 'object'
+          ? idInit
+          : input && typeof input === 'object'
+            ? input
+            : {};
+      if (init.method === 'POST') {
         if (!ajaxHandler) return { ok: false, status: 404, text: '{}' };
-        const params = new URLSearchParams(urlOrOpts.body || '');
-        return ajaxHandler(params, urlOrOpts);
+        const params = new URLSearchParams(init.body || '');
+        return ajaxHandler(params, init);
       }
       for (const [pattern, res] of Object.entries(routes)) {
-        if (urlOrOpts.includes(pattern)) {
-          return typeof res === 'function' ? res(urlOrOpts) : res;
+        if (url.includes(pattern)) {
+          return typeof res === 'function' ? res(url, init) : res;
         }
       }
       return { ok: false, status: 404, text: '' };

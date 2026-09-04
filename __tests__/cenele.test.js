@@ -58,7 +58,7 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:cenele'));
   it('has correct name', () => expect(ext.name).toBe('فضاء الروايات'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.9.1'));
+  it('has correct version', () => expect(ext.version).toBe('1.9.2'));
   it('has apiVersion 1', () => expect(ext.apiVersion).toBe(1));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://cenele.com'));
 
@@ -259,6 +259,30 @@ describe('parseChapterList (real 928-chapter novel)', () => {
     const nums = chapters.map((c) => c.number);
     expect(nums).toEqual([918, 919, 920, 921, 922, 923, 924, 925]);
   });
+
+  it('sends admin-ajax as a REAL POST with nonce+page in the body (bridge contract regression)', async () => {
+    // Earlier versions called ctx.xFetch({url, method, headers, body}) with ONE
+    // object. The host runtime reads init from the SECOND argument, so those
+    // requests went out as bare GETs with no body → HTTP 400 → 8-chapter fallback.
+    // Pin the contract: xFetch(url, init) with method POST + form-encoded body.
+    const seen = [];
+    const spyHandler = (params, init) => {
+      seen.push({ method: init.method, headers: init.headers, body: Object.fromEntries(params.entries()) });
+      return { ok: true, status: 200, text: '{}' }; // empty html so crawl ends after page 1
+    };
+    await ext.parseChapterList(REAL_NOVEL_URL, mockCeneleCtx({ 'the-creatures': ok(REAL_NOVEL_PAGE) }, spyHandler));
+    expect(seen.length).toBeGreaterThan(0);
+    const first = seen[0];
+    expect(first.method).toBe('POST');
+    expect(first.headers['Content-Type']).toContain('application/x-www-form-urlencoded');
+    expect(first.headers['X-Requested-With']).toBe('XMLHttpRequest');
+    expect(first.headers.Origin).toBe('https://cenele.com');
+    expect(first.headers.Referer).toBe('https://cenele.com/cont/the-creatures-that-we-are-riwya/');
+    expect(first.body.action).toBe('nhv_manga_single_chapters_page');
+    expect(first.body.manga_id).toBe('104602');
+    expect(first.body.per_page).toBe('100');
+    expect(first.body.page).toBe('1');
+  });
 });
 
 // ──────────────────────────────────────────────────────────────────
@@ -420,11 +444,11 @@ describe('Caching', () => {
     let fetchCount = 0;
     const ctx = {
       log: () => {},
-      xFetch: async (urlOrOpts) => {
-        if (typeof urlOrOpts !== 'string') {
-          return realChaptersAjaxHandler()(new URLSearchParams(urlOrOpts.body || ''));
+      xFetch: async (input, init) => {
+        if (init && typeof init === 'object') {
+          return realChaptersAjaxHandler()(new URLSearchParams(init.body || ''));
         }
-        if (urlOrOpts.includes('the-creatures')) {
+        if (typeof input === 'string' && input.includes('the-creatures')) {
           fetchCount += 1;
           return { ok: true, status: 200, text: REAL_NOVEL_PAGE };
         }

@@ -61,7 +61,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.9.1',
+  version: '1.9.2',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -209,8 +209,12 @@ registerExtension({
       Origin: origin
     };
     if (referer) headers.Referer = referer;
-    return ctx.xFetch({
-      url: url,
+    // HOST BRIDGE CONTRACT: ctx.xFetch(urlString, initObject). Options passed as
+    // a lone FIRST argument are dropped by the runtime bridge (it reads init from
+    // the second arg), which silently turned every admin-ajax POST into a bare
+    // GET with no nonce/action → HTTP 400 → full crawl fails → inline ~8 fallback.
+    // This single line was the chronic on-device "only 8 chapters" root cause.
+    return ctx.xFetch(url, {
       method: 'POST',
       headers: headers,
       body: body.join('&')

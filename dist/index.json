@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1788541588653,
+  "generatedAt": 1788542278891,
   "extensions": [
     {
       "id": "site:cenele",
       "name": "فضاء الروايات",
       "lang": "ar",
-      "version": "1.9.0",
+      "version": "1.9.1",
       "apiVersion": 1,
-      "size": 30349,
-      "sha256": "66db03fbca42a49bec63951fa898053eca451bb124b6a74ac7146a1c8f5a8728",
+      "size": 30757,
+      "sha256": "8569f154f240dd1a9939f34dbdb9604d16617c233eb67f592631bfec3ce7a637",
       "url": "site.cenele.js",
       "baseUrl": "https://cenele.com"
     },
@@ -47,5 +47,5 @@
       "baseUrl": "https://novelfull.com"
     }
   ],
-  "signature": "ONQAJ-EyZi8ZMtRI5SMNH2BiVnX1fEYC45acjSlfVjypdF9BRMHQLjGYe4o7gF2ek-EFzyCpowzjzpD1IQoJCQ"
+  "signature": "9AZQ-UFw9myElhBqe87WOHdjptzb_AaocELnV9BKY-ADBAdQ9YwkSBuQGCgCuUmQwNO5eNrGKrwOnr_dq3IhDQ"
 }

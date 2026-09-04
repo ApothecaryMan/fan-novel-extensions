@@ -47,7 +47,7 @@ registerExtension({
   id: 'site:hindawi',
   name: 'مؤسسة هنداوي',
   lang: 'ar',
-  version: '1.0.0',
+  version: '1.1.0',
   apiVersion: 1,
   baseUrl: 'https://www.safahat.org',
 
@@ -139,12 +139,10 @@ registerExtension({
     if (authorMatch) {
       author = this._decodeEntities(authorMatch[1]).trim();
     }
+    var translator = '';
     var translatorMatch = html.match(/<span>\s*ترجمة\s*<\/span>[\s\S]*?<a[^>]*>([^<]+)<\/a>/i);
     if (translatorMatch) {
-      var transName = this._decodeEntities(translatorMatch[1]).trim();
-      if (transName) {
-        author = author ? author + ' (ترجمة: ' + transName + ')' : 'ترجمة: ' + transName;
-      }
+      translator = this._decodeEntities(translatorMatch[1]).trim();
     }
 
     // 3. Cover URL (Use 304x406 JPG for fast native mobile rendering)
@@ -157,9 +155,11 @@ registerExtension({
       }
     }
 
-    // 4. Tags & Categories & Word count
+    // 4. Tags & Categories & Word Count
     var tags = [];
     var category = 'كتب وروايات';
+    var wordCount = undefined;
+    var readingMinutes = undefined;
     var catMatch = html.match(/<ul[^>]*class="[^"]*tags[^"]*"[^>]*>([\s\S]*?)<\/ul>/i);
     if (catMatch) {
       var tagRegex = /<a[^>]+href="[^"]*\/categories\/([^"\/]+)\/"[^>]*>([^<]+)<\/a>/gi;
@@ -171,17 +171,16 @@ registerExtension({
           if (category === 'كتب وروايات') category = tagName;
         }
       }
+      var wcMatch = catMatch[1].match(/<span>\s*([٠-٩0-9,\u066C\u066D\s]+)\s*كلمة\s*<\/span>/i);
+      if (wcMatch) {
+        var cleanWc = parseInt(this._toLatinDigits(wcMatch[1]), 10);
+        if (cleanWc && !isNaN(cleanWc) && cleanWc > 0) {
+          wordCount = cleanWc;
+          // For classical/literature novels: ~140 words per minute (deliberate reading speed)
+          readingMinutes = Math.max(1, Math.round(cleanWc / 140));
+        }
+      }
     }
-
-    // Word count badge as tag
-    var wordMatch = html.match(/<span>\s*([٠-٩0-9,]+)\s*كلمة\s*<\/span>/i);
-    if (wordMatch) {
-      var wordCountStr = this._decodeEntities(wordMatch[1]).trim();
-      tags.push(wordCountStr + ' كلمة');
-    }
-
-    // Add source tag
-    tags.push('مؤسسة هنداوي');
 
     // 5. Summary
     var summary = '';
@@ -206,6 +205,9 @@ registerExtension({
       url: fullUrl,
       title: title || 'كتاب بدون عنوان',
       author: author || 'مؤسسة هنداوي',
+      translator: translator || undefined,
+      wordCount: wordCount,
+      readingMinutes: readingMinutes,
       coverUrl: coverUrl,
       summary: summary,
       status: 'مكتملة',

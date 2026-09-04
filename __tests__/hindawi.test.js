@@ -50,12 +50,13 @@ describe('Hindawi Parsing logic with fixtures', () => {
     const info = await ext.parseNovelInfo(novelUrl, ctx);
 
     expect(info.title).toBe('الحرير');
-    expect(info.author).toContain('أليساندرو باريكو');
-    expect(info.author).toContain('طلعت الشايب');
+    expect(info.author).toBe('أليساندرو باريكو');
+    expect(info.translator).toBe('طلعت الشايب');
     expect(info.status).toBe('مكتملة');
     expect(info.category).toBe('روايات');
-    expect(info.tags).toContain('١٣,٠٦٩ كلمة');
-    expect(info.tags).toContain('مؤسسة هنداوي');
+    expect(info.tags).toEqual(['روايات']);
+    expect(info.wordCount).toBe(13069);
+    expect(info.readingMinutes).toBe(93);
     expect(info.coverUrl).toBe('https://downloads.hindawi.org/covers/304x406/25868315.jpg');
     expect(info.summary).toContain('هيرفي جونكور');
   });

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1788475678854,
+  "generatedAt": 1788485737182,
   "extensions": [
     {
       "id": "site:cenele",
@@ -17,10 +17,10 @@
       "id": "site:hindawi",
       "name": "مؤسسة هنداوي",
       "lang": "ar",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "apiVersion": 1,
-      "size": 15883,
-      "sha256": "a87b8ba20992bc12ace81d918b596fcc8d00820e724241d33ec27b248ca7e831",
+      "size": 16092,
+      "sha256": "2f2d08a9a08e54bc4c911b584e620ef78436addbd44cef1e8c9cdf51b8c8669d",
       "url": "site.hindawi.js",
       "baseUrl": "https://www.safahat.org"
     },
@@ -47,5 +47,5 @@
       "baseUrl": "https://novelfull.com"
     }
   ],
-  "signature": "EHFCyvXBGIl1-yNw-C655kcA6fEeQSRsOeVpySRm7yH_wahCBteWXhNTBp3Z5ALB7g_77UGkSJ1npaGjF1gECQ"
+  "signature": "XAdPw31FhfnsGrHdhAEtAlLoPGMnm8XJl0U5QGIISzgMYgCrJHpyeABQ681kk397MOW-EsqSY0m_zz-HjxfIAQ"
 }

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1788543217961,
+  "generatedAt": 1788567937444,
   "extensions": [
     {
       "id": "site:cenele",
@@ -11,7 +11,8 @@
       "size": 31161,
       "sha256": "ccff3aa6a63a3269fe905fd044f6302fa22c0ffae4e114a536afc4e8bd180115",
       "url": "site.cenele.js",
-      "baseUrl": "https://cenele.com"
+      "baseUrl": "https://cenele.com",
+      "icon": "icons/cenele.png"
     },
     {
       "id": "site:hindawi",
@@ -22,7 +23,8 @@
       "size": 16092,
       "sha256": "2f2d08a9a08e54bc4c911b584e620ef78436addbd44cef1e8c9cdf51b8c8669d",
       "url": "site.hindawi.js",
-      "baseUrl": "https://www.safahat.org"
+      "baseUrl": "https://www.safahat.org",
+      "icon": "icons/hindawi.ico"
     },
     {
       "id": "site:kolnovel",
@@ -33,7 +35,8 @@
       "size": 33835,
       "sha256": "2afc4dbaabc7979d554b52aa39283f889b4e1875dc161092ce934efcd00a727d",
       "url": "site.kolnovel.js",
-      "baseUrl": "https://kolnovel.com"
+      "baseUrl": "https://kolnovel.com",
+      "icon": "icons/kolnovel.png"
     },
     {
       "id": "site:novelfull",
@@ -44,8 +47,9 @@
       "size": 17659,
       "sha256": "b0867ef04bcee5490de809472c469459299e7e3d76345067c43cffdd48c7c523",
       "url": "site.novelfull.js",
-      "baseUrl": "https://novelfull.com"
+      "baseUrl": "https://novelfull.com",
+      "icon": "icons/novelfull.ico"
     }
   ],
-  "signature": "iXanbRiWCnsT8Lgr6sd7mdiXXKOVcToe1Neodaguh_TZaqAplxBc_x3qPv8DfV9OpeeoQW4b7onHZh8X0WAeAA"
+  "signature": "unsigned-dev"
 }

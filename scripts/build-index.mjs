@@ -29,7 +29,9 @@ import {
   writeFileSync,
   mkdirSync,
   copyFileSync,
-  existsSync
+  existsSync,
+  statSync,
+  unlinkSync
 } from 'node:fs';
 import { join, basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,7 +39,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const EXTENSIONS_DIR = join(ROOT, 'extensions');
-const DIST_DIR = join(ROOT, 'dist');
+const ICONS_DIR = join(ROOT, 'icons');
 const DOCS_DIR = join(ROOT, 'docs');
 const KEYS_DIR = join(ROOT, 'keys');
 
@@ -99,7 +101,7 @@ function parseHeader(code) {
 
   // If no header comments found, extract from registerExtension({...})
   if (!meta.id) {
-    for (const key of ['id', 'name', 'lang', 'version', 'baseUrl']) {
+    for (const key of ['id', 'name', 'lang', 'version', 'baseUrl', 'icon']) {
       const m = code.match(FIELD_RE(key));
       if (m) meta[key] = m[1];
     }
@@ -110,17 +112,91 @@ function parseHeader(code) {
   return meta;
 }
 
+async function fetchFaviconForBaseUrl(baseUrl, idSuffix) {
+  if (!baseUrl) return null;
+  try {
+    const rootUrl = baseUrl.replace(/\/$/, '');
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 7000);
+
+    const res = await fetch(rootUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      },
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+
+    let iconCandidateUrl = null;
+
+    if (res.ok) {
+      const html = await res.text();
+      // Look for icon tags in HTML: rel="icon", rel="shortcut icon", rel="apple-touch-icon"
+      const match = html.match(/<link[^>]+rel=['"][^'"]*(?:icon|apple-touch-icon)[^'"]*['"][^>]+href=['"]([^'"]+)['"]/i) ||
+                    html.match(/<link[^>]+href=['"]([^'"]+)['"][^>]+rel=['"][^'"]*(?:icon|apple-touch-icon)[^'"]*['"]/i);
+      if (match && match[1]) {
+        const rawHref = match[1].trim();
+        try {
+          iconCandidateUrl = new URL(rawHref, rootUrl).toString();
+        } catch {
+          iconCandidateUrl = null;
+        }
+      }
+    }
+
+    // Fallback to /favicon.ico if no link tag found
+    if (!iconCandidateUrl) {
+      iconCandidateUrl = `${rootUrl}/favicon.ico`;
+    }
+
+    // Download the candidate icon
+    const imgCtrl = new AbortController();
+    const imgTimeout = setTimeout(() => imgCtrl.abort(), 6000);
+    const imgRes = await fetch(iconCandidateUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+      },
+      signal: imgCtrl.signal
+    });
+    clearTimeout(imgTimeout);
+
+    if (imgRes.ok) {
+      const buffer = Buffer.from(await imgRes.arrayBuffer());
+      if (buffer.length > 50) { // sanity check
+        // Determine extension from content-type or candidate url
+        const contentType = (imgRes.headers.get('content-type') || '').toLowerCase();
+        let ext = '.png';
+        if (contentType.includes('svg') || iconCandidateUrl.endsWith('.svg')) ext = '.svg';
+        else if (contentType.includes('webp') || iconCandidateUrl.endsWith('.webp')) ext = '.webp';
+        else if (contentType.includes('jpeg') || contentType.includes('jpg') || iconCandidateUrl.endsWith('.jpg')) ext = '.jpg';
+        else if (contentType.includes('icon') || iconCandidateUrl.endsWith('.ico')) ext = '.ico';
+
+        mkdirSync(ICONS_DIR, { recursive: true });
+        const savedFileName = `${idSuffix}${ext}`;
+        const savePath = join(ICONS_DIR, savedFileName);
+        writeFileSync(savePath, buffer);
+        console.log(`  🌐 Scraped favicon for ${idSuffix} -> icons/${savedFileName} (${buffer.length} bytes)`);
+        return `icons/${savedFileName}`;
+      }
+    }
+  } catch (err) {
+    // Network or scraping failed, return null to gracefully use fallback
+  }
+  return null;
+}
+
 // ---- Main ----
 
-function main() {
+async function main() {
   const sign = process.argv.includes('--sign');
+  const forceRefreshIcons = process.argv.includes('--refresh-icons');
 
   if (!existsSync(EXTENSIONS_DIR)) {
     console.error('❌ No extensions/ directory found. Create it and add .js extension files.');
     process.exit(1);
   }
 
-  mkdirSync(DIST_DIR, { recursive: true });
+  mkdirSync(DOCS_DIR, { recursive: true });
 
   const files = readdirSync(EXTENSIONS_DIR).filter(f => f.endsWith('.js'));
   if (files.length === 0) {
@@ -147,8 +223,8 @@ function main() {
 
     const sha256 = createHash('sha256').update(code, 'utf-8').digest('hex');
 
-    // Copy to dist/
-    copyFileSync(filePath, join(DIST_DIR, file));
+    // Copy to docs/
+    copyFileSync(filePath, join(DOCS_DIR, file));
 
     const entry = {
       id: meta.id,
@@ -162,8 +238,53 @@ function main() {
     };
     if (meta.baseUrl) entry.baseUrl = meta.baseUrl;
 
+    // Determine icon: from meta.icon, or auto-scraped for idSuffix
+    const idSuffix = meta.id.replace(/^site:/, '');
+    let iconFile = meta.icon;
+
+    // Check if we already have an existing local icon for this extension
+    let existingIconPath = null;
+    if (existsSync(ICONS_DIR)) {
+      for (const ext of ['.png', '.jpg', '.webp', '.svg', '.ico']) {
+        const candidate = join(ICONS_DIR, `${idSuffix}${ext}`);
+        if (existsSync(candidate)) {
+          existingIconPath = candidate;
+          iconFile = `icons/${idSuffix}${ext}`;
+          break;
+        }
+      }
+    }
+
+    // If extension was modified/updated:
+    // Check if extension file mtime is newer than existing icon, or previous index entry differed
+    const fileStat = statSync(filePath);
+    let shouldRefresh = forceRefreshIcons;
+
+    if (!shouldRefresh && existingIconPath) {
+      try {
+        const iconStat = statSync(existingIconPath);
+        // If extension file was touched/updated after icon was created, refresh the icon!
+        if (fileStat.mtimeMs > iconStat.mtimeMs) {
+          shouldRefresh = true;
+        }
+      } catch {
+        shouldRefresh = true;
+      }
+    }
+
+    if (!iconFile || shouldRefresh) {
+      if (meta.baseUrl) {
+        const refreshed = await fetchFaviconForBaseUrl(meta.baseUrl, idSuffix);
+        if (refreshed) {
+          iconFile = refreshed;
+        }
+      }
+    }
+
+    if (iconFile) entry.icon = iconFile;
+
     entries.push(entry);
-    console.log(`  ✅ ${meta.id} v${meta.version} (${bytes.length} bytes)`);
+    console.log(`  ✅ ${meta.id} v${meta.version} (${bytes.length} bytes)${entry.icon ? ` [icon: ${entry.icon}]` : ''}`);
   }
 
   const index = {
@@ -200,16 +321,21 @@ function main() {
     console.log(`\n⚠️  Index NOT signed (dev mode). Use --sign for production.`);
   }
 
-  mkdirSync(DOCS_DIR, { recursive: true });
-  for (const file of files) {
-    copyFileSync(join(EXTENSIONS_DIR, file), join(DOCS_DIR, file));
+  // Copy icons to docs/icons if ICONS_DIR exists
+  if (existsSync(ICONS_DIR)) {
+    const docsIcons = join(DOCS_DIR, 'icons');
+    mkdirSync(docsIcons, { recursive: true });
+
+    const iconFiles = readdirSync(ICONS_DIR);
+    for (const icon of iconFiles) {
+      copyFileSync(join(ICONS_DIR, icon), join(docsIcons, icon));
+    }
+    console.log(`🖼️  Copied ${iconFiles.length} icon(s) to docs/icons`);
   }
 
-  writeFileSync(join(DIST_DIR, 'index.json'), JSON.stringify(output, null, 2));
   writeFileSync(join(DOCS_DIR, 'index.json'), JSON.stringify(output, null, 2));
-  writeFileSync(join(DIST_DIR, '.nojekyll'), '# Disable Jekyll\n');
   writeFileSync(join(DOCS_DIR, '.nojekyll'), '# Disable Jekyll\n');
-  console.log(`📄 dist/index.json & docs/index.json written`);
+  console.log(`📄 docs/index.json written`);
   console.log(`📦 ${entries.length} extension(s) ready`);
 }
 

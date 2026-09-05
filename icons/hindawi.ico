@@ -1,0 +1,240 @@
+
+
+
+
+
+
+
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="format-detection" content="telephone=no">
+    <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+        
+    
+    <meta property="og:image" content="https://www.safahat.org/Content/Images/hindawi-share.jpg" />
+    
+        <title>صفحات</title>
+        <link rel="shortcut icon" href="/content/images/favicon.png" type="image/x-icon">
+    <link rel="apple-touch-icon" href="/touch-icon-iphone.png">
+    <link rel="apple-touch-icon" sizes="76x76" href="/touch-icon-ipad.png">
+    <link rel="apple-touch-icon" sizes="120x120" href="/touch-icon-iphone-retina.png">
+    <link rel="apple-touch-icon" sizes="152x152" href="/touch-icon-ipad-retina.png">
+<link href="/content/css/app-min.css?v=20" rel="stylesheet"/>
+    
+    <script>
+        window.fbAsyncInit = function () {
+            FB.init({
+                appId: '1089322842214749',
+                xfbml: true,
+                version: 'v19.0'
+            });
+            FB.AppEvents.logPageView();
+        };
+
+        (function (d, s, id) {
+            var js, fjs = d.getElementsByTagName(s)[0];
+            if (d.getElementById(id)) { return; }
+            js = d.createElement(s); js.id = id;
+            js.src = "https://connect.facebook.net/en_US/sdk.js";
+            fjs.parentNode.insertBefore(js, fjs);
+        }(document, 'script', 'facebook-jssdk'));
+    </script>
+
+    
+
+    <!-- Google Tag Manager -->
+    <script>
+        (function (w, d, s, l, i) {
+            w[l] = w[l] || []; w[l].push({
+                'gtm.start':
+                    new Date().getTime(), event: 'gtm.js'
+            }); var f = d.getElementsByTagName(s)[0],
+                j = d.createElement(s), dl = l != 'dataLayer' ? '&l=' + l : ''; j.async = true; j.src =
+                    'https://www.googletagmanager.com/gtm.js?id=' + i + dl; f.parentNode.insertBefore(j, f);
+        })(window, document, 'script', 'dataLayer', 'GTM-PJ3JZG5');</script>
+    <!-- End Google Tag Manager -->
+
+
+
+</head>
+<body class="">
+    <!-- Google Tag Manager (noscript) -->
+    <noscript>
+        <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-PJ3JZG5"
+                height="0" width="0" style="display:none;visibility:hidden"></iframe>
+    </noscript>
+    <!-- End Google Tag Manager (noscript) -->
+    <div class="globalWrapper">
+        <a href="#" class="backToTop"><i class="mIcon">&#xf303;</i></a>
+        <header class="main-header">
+            <div class="top-header">
+                <div class="container">
+                    <div class="logo">
+                        <a href="/">
+                            <img src="/content/images/Hindawi_Logo_Landscape.svg?v=4" alt="Safahat Logo">
+                        </a>
+                    </div>
+                    
+                    <div class="search">
+<form action="/layout/search/" method="post">                            <label>
+                                <input type="text" id="keyword" name="keyword" placeholder="ابحث ..."
+                                       document.getElementById('btnSearch').click(); }">
+                            </label>
+                            <button type="submit" id="btnSearch"><i class="f-icon search-icon"></i></button>
+</form>                        <button><i class="f-icon medium search-icon"></i></button>
+                    </div>
+                    <a class="toggle-mobile-nav" href="#" aria-label="">
+                        <span></span> <span></span> <span></span>
+                    </a>
+                </div>
+            </div>
+            <div class="bottom-header">
+                <div class="container">
+                    <div class="mobile-only">
+                            <div class="mobile-only--header">
+                                <h2>
+                                    <i class="f-icon user-icon"></i>
+                                    زائر
+                                </h2>
+                                <ul>
+                                    <li>
+                                        <a href="/donation/" class="text-orange">
+                                            <i class="f-icon heart-icon"></i>
+                                            <span> تبرَّع لنا </span>
+                                        </a>
+                                    </li>
+                                </ul>
+                            </div>
+                            <div class="mobile-only__actions">
+                                <a href="/account/signin/" class="button btn-primary">
+                                    <span> تسجيل الاشتراك </span>
+                                </a>
+                                <p>
+                                    لديك حساب؟
+                                    <a href="/account/signin/" class="button link-btn">
+                                        <span> تسجيل دخول </span>
+                                    </a>
+                                </p>
+                            </div>
+                    </div>
+                    <nav class="navbar">
+                        <ul class="main-nav nav-links nav-links--main-nav">
+                                <li><a class="" href="/">الرئيسية</a></li>
+                                <li><a class="" href="/books/">الكتب</a></li>
+                                <li><a class="" href="/contributors/">المساهمون</a></li>
+                                <li><a class="" href="/about/">من نحن</a></li>
+
+                        </ul>
+                        <ul class="extra-nav">
+                            <li>
+                                <a href="/donation/" class="text-orange">
+                                    <i class="f-icon heart-icon"></i>
+                                    <span> تبرَّع لنا </span>
+                                </a>
+                            </li>
+                        </ul>
+                    </nav>
+                </div>
+            </div>
+        </header>
+        
+<section class="pageHeader">
+    
+
+    <div class="triggerAside">
+        <a href="#">
+            <span></span>
+            <span></span>
+            <span></span>
+        </a>
+        <!--toggleAside-->
+    </div>
+    <!--triggerAside-->
+</section>
+<!--pageHeader-->
+
+<section class="staticPage errorPage">
+    <div class="container"> 
+
+        <main class="pageContent">
+            <article class="errorMessege">
+                <figure>
+                    <img src="/content/images/error-404.svg" alt="Thumb up image">
+                </figure>
+                <h1>404</h1>
+                <h2>هذه الصفحة غير موجودة.</h2>
+                <p>يمكنك الذهاب إلى <a href="/">الصفحة الرئيسية</a>.</p>
+            </article>
+        </main>
+        <!--pageContent-->
+    </div>
+</section>
+<!--staticPage-->
+        <div class="footerWrapper">
+            <footer class="mainFooter">
+                <div class="container">
+                    <div class="right">
+                        <figure>
+                            <a href="/"><img src="/content/images/Safahat_Logo.svg?v=3" alt="Safahat Logo">Safahat</a>
+                        </figure>
+                    </div>
+                    <div class="center">
+                        <ul>
+                            <li><a href="/">الرئيسية</a></li>
+                            
+                            <li><a href="/about/">من نحن</a></li>
+
+                            <li><a href="/books/"> الكتب </a></li>
+                            <li><a href="/faqs/">أسئلة متكررة</a></li>
+                            <li><a href="/contributors/">المساهمون</a></li> 
+
+                            <li><a href="/privacy/">سياسة الخصوصية</a></li>
+
+
+
+
+                        </ul>
+                    </div>
+                    <div class="left">
+                        <h3>مؤسسة هنداوي</h3>
+                        <p>«مؤسسة هنداوي» مؤسسة غير هادفة للربح، تهدف إلى نشر المعرفة والثقافة، وغرس حب القراءة بين المتحدثين باللغة العربية.</p>
+                    </div>
+                </div>
+            </footer>
+            <div class="footerBottom">
+                <div class="container">
+                    <p>جميع الحقوق محفوظة لمؤسسة هنداوي &copy; ٢٠٢٦</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="/devscripts/jquery.min.js"></script>
+    <script src="/devscripts/jquery.validate.min.js"></script>
+    <script src="/devscripts/main.js"></script>
+    <script src="https://ajax.microsoft.com/ajax/jquery.validate/1.7/additional-methods.js"></script>
+    <script src="/content/js/script.js?v=15"></script>
+    <script type="text/javascript">
+        function getCookie(cname) {
+            let name = cname + "=";
+            let decodedCookie = decodeURIComponent(document.cookie);
+            let ca = decodedCookie.split(';');
+            for (let i = 0; i < ca.length; i++) {
+                let c = ca[i];
+                while (c.charAt(0) == ' ') {
+                    c = c.substring(1);
+                }
+                if (c.indexOf(name) == 0) {
+                    return c.substring(name.length, c.length);
+                }
+            }
+            return "";
+        }
+    </script>
+    
+    
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a361095b7e7c576e',t:'MTc4ODU2NzI5NQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>

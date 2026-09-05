@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1788567937444,
+  "generatedAt": 1788570183772,
   "extensions": [
     {
       "id": "site:cenele",
@@ -51,5 +51,5 @@
       "icon": "icons/novelfull.ico"
     }
   ],
-  "signature": "unsigned-dev"
+  "signature": "xkebCmyykBt2y6b-R4G89hZUBW0nvl2GsKKXehjQQp8m9OdJ8NsfMYrfKWZ1cAK86RxEJUyDSkUGjsEKpqPrBw"
 }

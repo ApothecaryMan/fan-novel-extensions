@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1788570183772,
+  "generatedAt": 1788572996505,
   "extensions": [
     {
       "id": "site:cenele",
@@ -20,11 +20,11 @@
       "lang": "ar",
       "version": "1.1.0",
       "apiVersion": 1,
-      "size": 16092,
-      "sha256": "2f2d08a9a08e54bc4c911b584e620ef78436addbd44cef1e8c9cdf51b8c8669d",
+      "size": 16290,
+      "sha256": "19c028354dfd973dcf7c2d9b05382350db53b9d7a39a06aa253f083f2243a732",
       "url": "site.hindawi.js",
       "baseUrl": "https://www.safahat.org",
-      "icon": "icons/hindawi.ico"
+      "icon": "icons/hindawi.png"
     },
     {
       "id": "site:kolnovel",
@@ -48,8 +48,8 @@
       "sha256": "b0867ef04bcee5490de809472c469459299e7e3d76345067c43cffdd48c7c523",
       "url": "site.novelfull.js",
       "baseUrl": "https://novelfull.com",
-      "icon": "icons/novelfull.ico"
+      "icon": "icons/novelfull.png"
     }
   ],
-  "signature": "xkebCmyykBt2y6b-R4G89hZUBW0nvl2GsKKXehjQQp8m9OdJ8NsfMYrfKWZ1cAK86RxEJUyDSkUGjsEKpqPrBw"
+  "signature": "LVvfQ5Z40u1wL8NDbjrWhysTRH51OHPzzgof5iBzyyszCOiHEPFMnhTckIotx4pdyF1i-x5UBiCJu6NICUHKDQ"
 }

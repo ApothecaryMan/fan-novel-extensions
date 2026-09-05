@@ -70,10 +70,11 @@ console.warn(
 try {
   execSync('npm run build:sign', { cwd: repo, stdio: 'inherit' });
   // Re-stage the regenerated manifest for this commit.
-  execSync('git add dist/index.json docs/index.json dist/*.js docs/*.js', {
+  execSync('git add docs/index.json docs/*.js docs/icons/*', {
     cwd: repo,
     stdio: 'inherit',
   });
+
 } catch (e) {
   console.error('pre-commit: failed to rebuild signed index', e);
   process.exit(1);

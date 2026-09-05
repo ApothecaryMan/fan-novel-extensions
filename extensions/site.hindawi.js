@@ -1,3 +1,10 @@
+// @id       site:hindawi
+// @name     مؤسسة هنداوي
+// @version  1.1.0
+// @lang     ar
+// @apiVersion 1
+// @baseUrl  https://www.safahat.org
+// ==========================================
 // site:hindawi — remote-JS extension for مؤسسة هنداوي (hindawi.org / safahat.org)
 // Clean sandboxed scraper adhering to the Extension Runtime Specification (ctx.xFetch).
 // Features:

@@ -7,10 +7,9 @@
 
 import { ed25519 } from '@noble/curves/ed25519';
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execSync } from 'node:child_process';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const EXTENSIONS_DIR = join(ROOT, 'extensions');
@@ -44,94 +43,25 @@ function parseHeader(code) {
   return meta;
 }
 
-// ---- Icon Resolver & Auto-scraper ----
-async function resolveIcon(meta, idSuffix, extensionMtime, forceRefresh) {
+// ---- Icon Resolver ----
+function resolveIcon(meta, idSuffix) {
   if (meta.icon) return meta.icon;
 
-  // 1. Check existing local icon
-  let localPath = null;
-  let localRel = null;
   if (existsSync(ICONS_DIR)) {
     for (const ext of ['.png', '.jpg', '.webp', '.svg', '.ico']) {
       const file = join(ICONS_DIR, `${idSuffix}${ext}`);
       if (existsSync(file)) {
-        localPath = file;
-        localRel = `icons/${idSuffix}${ext}`;
-        break;
+        return `icons/${idSuffix}${ext}`;
       }
     }
   }
 
-  // Check if extension was modified after the icon was generated
-  const needsScrape = !localPath || forceRefresh || (localPath && extensionMtime > statSync(localPath).mtimeMs);
-  if (!needsScrape || !meta.baseUrl) return localRel;
-
-  // 2. Scrape from site baseUrl
-  try {
-    const rootUrl = meta.baseUrl.replace(/\/$/, '');
-    const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36' };
-    const res = await fetch(rootUrl, { headers, signal: AbortSignal.timeout(6000) });
-    if (!res.ok) return localRel;
-
-    const html = await res.text();
-    const linkTags = html.match(/<link\b[^>]+>/gi) || [];
-    const candidates = [];
-
-    for (const tag of linkTags) {
-      if (/rel=["'][^"']*(?:icon|apple-touch-icon)[^"']*["']/i.test(tag)) {
-        const hrefMatch = tag.match(/href=["']([^"']+)["']/i);
-        if (hrefMatch?.[1]) {
-          try {
-            const url = new URL(hrefMatch[1].trim(), rootUrl).toString();
-            const sizeMatch = tag.match(/sizes=["'](\d+)x(\d+)["']/i);
-            let score = /apple-touch-icon/i.test(tag) ? 150 : (sizeMatch ? parseInt(sizeMatch[1], 10) : 32);
-            candidates.push({ url, score });
-          } catch {}
-        }
-      }
-    }
-
-    candidates.sort((a, b) => b.score - a.score);
-    const iconUrl = candidates[0]?.url || `${rootUrl}/favicon.ico`;
-
-    const imgRes = await fetch(iconUrl, { headers, signal: AbortSignal.timeout(6000) });
-    if (!imgRes.ok) return localRel;
-
-    const ct = (imgRes.headers.get('content-type') || '').toLowerCase();
-    if (ct.includes('text/html')) return localRel;
-
-    const buffer = Buffer.from(await imgRes.arrayBuffer());
-    if (buffer.length < 50) return localRel;
-
-    let ext = '.png';
-    if (ct.includes('svg') || iconUrl.endsWith('.svg')) ext = '.svg';
-    else if (ct.includes('webp') || iconUrl.endsWith('.webp')) ext = '.webp';
-    else if (ct.includes('jpeg') || ct.includes('jpg') || iconUrl.endsWith('.jpg')) ext = '.jpg';
-    else if (ct.includes('icon') || iconUrl.endsWith('.ico')) ext = '.ico';
-
-    mkdirSync(ICONS_DIR, { recursive: true });
-    const savedName = `${idSuffix}${ext}`;
-    const savePath = join(ICONS_DIR, savedName);
-    writeFileSync(savePath, buffer);
-
-    // Constrain to 96x96 (<= 100x100) if image tool is present
-    if (['.png', '.jpg', '.webp'].includes(ext)) {
-      try {
-        execSync(`magick "${savePath}" -resize '96x96>' -strip "${savePath}" 2>/dev/null || convert "${savePath}" -resize '96x96>' -strip "${savePath}" 2>/dev/null`);
-      } catch {}
-    }
-
-    console.log(`  🌐 Scraped favicon for ${idSuffix} -> icons/${savedName}`);
-    return `icons/${savedName}`;
-  } catch {
-    return localRel;
-  }
+  return null;
 }
 
 // ---- Main Build ----
 async function main() {
   const sign = process.argv.includes('--sign');
-  const forceRefresh = process.argv.includes('--refresh-icons');
 
   if (!existsSync(EXTENSIONS_DIR)) {
     console.error('❌ No extensions/ directory found.');
@@ -156,8 +86,7 @@ async function main() {
     copyFileSync(filePath, join(DOCS_DIR, file));
 
     const idSuffix = meta.id.replace(/^site:/, '');
-    const fileMtime = statSync(filePath).mtimeMs;
-    const icon = await resolveIcon(meta, idSuffix, fileMtime, forceRefresh);
+    const icon = resolveIcon(meta, idSuffix);
 
     const entry = {
       id: meta.id,

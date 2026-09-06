@@ -19,7 +19,7 @@ describe('site:rean extension', () => {
     expect(ext.id).toBe('site:rean');
     expect(ext.name).toBe('شبكة ريان');
     expect(ext.lang).toBe('ar');
-    expect(ext.version).toBe('1.0.0');
+    expect(ext.version).toBe('1.0.1');
     expect(ext.apiVersion).toBe(1);
     expect(ext.baseUrl).toBe('https://rean.org');
   });

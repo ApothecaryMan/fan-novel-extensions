@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1788729073009,
+  "generatedAt": 1788732265901,
   "extensions": [
     {
       "id": "site:cenele",
       "name": "فضاء الروايات",
       "lang": "ar",
-      "version": "1.9.2",
+      "version": "1.9.3",
       "apiVersion": 1,
-      "size": 31161,
-      "sha256": "ccff3aa6a63a3269fe905fd044f6302fa22c0ffae4e114a536afc4e8bd180115",
+      "size": 31859,
+      "sha256": "43cd76edc4e8c9bf768ba3c9a88d38e10108dc9f94285418086aba37390ce808",
       "url": "site.cenele.js",
       "baseUrl": "https://cenele.com",
       "icon": "icons/cenele.png"
@@ -18,10 +18,10 @@
       "id": "site:hindawi",
       "name": "مؤسسة هنداوي",
       "lang": "ar",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "apiVersion": 1,
-      "size": 16290,
-      "sha256": "19c028354dfd973dcf7c2d9b05382350db53b9d7a39a06aa253f083f2243a732",
+      "size": 16950,
+      "sha256": "f6048613dee5ff8ed6036916bb18ccc6d8c4998655168b09dd09b7390221016a",
       "url": "site.hindawi.js",
       "baseUrl": "https://www.safahat.org",
       "icon": "icons/hindawi.png"
@@ -30,10 +30,10 @@
       "id": "site:kolnovel",
       "name": "كول نوفيل",
       "lang": "ar",
-      "version": "1.5.1",
+      "version": "1.5.2",
       "apiVersion": 1,
-      "size": 33835,
-      "sha256": "2afc4dbaabc7979d554b52aa39283f889b4e1875dc161092ce934efcd00a727d",
+      "size": 34529,
+      "sha256": "4f2af4868fb473d49f1ab25228b827a06f229a4842527b8f40791a556ace0a67",
       "url": "site.kolnovel.js",
       "baseUrl": "https://kolnovel.com",
       "icon": "icons/kolnovel.png"
@@ -42,10 +42,10 @@
       "id": "site:novelfull",
       "name": "NovelFull",
       "lang": "en",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "apiVersion": 1,
-      "size": 17659,
-      "sha256": "b0867ef04bcee5490de809472c469459299e7e3d76345067c43cffdd48c7c523",
+      "size": 18353,
+      "sha256": "45a17cd800442118cc37d6912d89d952475ed6b0d6955ddebf24c7c7287c2c18",
       "url": "site.novelfull.js",
       "baseUrl": "https://novelfull.com",
       "icon": "icons/novelfull.png"
@@ -54,24 +54,24 @@
       "id": "site:rean",
       "name": "شبكة ريان",
       "lang": "ar",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "apiVersion": 1,
-      "size": 21178,
-      "sha256": "1aea355443df1b75ad60c25d1d64a26d58de86ce5a198a75b51788a5cabc0a39",
+      "size": 21847,
+      "sha256": "e5c90b02c954141239ce58e99c231e9fbe1fe0a44a1a02f7085f5fdde92f5726",
       "url": "site.rean.js",
       "baseUrl": "https://rean.org"
     },
     {
       "id": "site:truthnovel",
-      "name": "سيد الحقيقة (رواية خاصة)",
+      "name": "رواية سيد الحقيقة",
       "lang": "ar",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "apiVersion": 1,
-      "size": 12384,
-      "sha256": "868193945ee8f19a98409d8bf03a905549c5adfe4cd0ac2ced8b7e8fcb239f59",
+      "size": 12743,
+      "sha256": "6d5a9ae9328fb1ccede0826ca6f5beb74d3ee30afe1d9c0e92dd09c82d849967",
       "url": "site.truthnovel.js",
       "baseUrl": "https://truthnovel.top"
     }
   ],
-  "signature": "DGihCTQARcsBqXfTvrMctnk5o8srfD2sLelJS8nu2T4_iBtDSf8xN_P3bJIPlNzDt-dQsw2b3Lg3pzzrcwQUBA"
+  "signature": "C_p20Ms0R0t4yq_YatGWEAK_hPab0g7IkFaUWWGohCkpd8mNNklF6pU1EoPZ2lhO4sDHPE0NoGeCmarmFfsPCg"
 }

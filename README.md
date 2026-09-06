@@ -24,8 +24,7 @@ npm run build:sign
 
 ## 🖼️ Extension Icons
 
-- **Primary Storage**: Place source icons in the `icons/` directory (e.g. `icons/kolnovel.png`, `icons/hindawi.png`, `icons/cenele.png`, `icons/novelfull.ico`).
-- **Auto-Scraping & Refresh**: The build script checks the modification time of each extension file. When an extension is updated, it automatically fetches and updates the latest favicon/logo directly from the source site if needed.
+- **Primary Storage**: Place source icons in the `icons/` directory (e.g. `icons/kolnovel.png`, `icons/hindawi.png`, `icons/cenele.png`, `icons/novelfull.png`).
 - **Publishing Output**: The build script copies all icons directly to `docs/icons/` to be served via GitHub Pages.
 
 ---

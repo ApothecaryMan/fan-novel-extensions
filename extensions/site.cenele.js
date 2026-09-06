@@ -61,7 +61,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.9.2',
+  version: '1.9.3',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -77,12 +77,14 @@ registerExtension({
   },
 
   _decodeEntities: function (str) {
+    if (!str) return '';
     var named = {
       amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
       hellip: '…', ndash: '–', mdash: '—', lsquo: '‘', rsquo: '’',
-      ldquo: '“', rdquo: '”', middot: '·', bull: '•'
+      ldquo: '“', rdquo: '”', middot: '·', bull: '•', copy: '©', reg: '®', trade: '™', rlm: ''
     };
-    return String(str).replace(/&([a-zA-Z][a-zA-Z0-9]*|#[xX]?[0-9a-fA-F]+);/g, function (m, name) {
+    var res = String(str).replace(/&amp;/gi, '&');
+    res = res.replace(/&([a-zA-Z][a-zA-Z0-9]*|#[xX]?[0-9a-fA-F]+);/g, function (m, name) {
       var low = name.toLowerCase();
       var cp = null;
       if (low.charAt(0) === '#') {
@@ -100,6 +102,25 @@ registerExtension({
       }
       return String.fromCharCode(cp);
     });
+
+    res = res.replace(/;(\d{2,6})#/g, function (m, digits) {
+      var cp = parseInt(digits, 10);
+      if (!cp || cp < 0 || cp > 0x10FFFF) return m;
+      if (cp > 0xFFFF) {
+        cp -= 0x10000;
+        return String.fromCharCode(0xD800 + (cp >> 10), 0xDC00 + (cp & 0x3FF));
+      }
+      return String.fromCharCode(cp);
+    });
+
+    return res
+      .replace(/;8230#/g, '…')
+      .replace(/&#8230;/g, '…')
+      .replace(/;8220#/g, '“')
+      .replace(/;8221#/g, '”')
+      .replace(/;8211#/g, '–')
+      .replace(/;8212#/g, '—')
+      .replace(/&hellip;/gi, '…');
   },
 
   _toLatinDigits: function (str) {

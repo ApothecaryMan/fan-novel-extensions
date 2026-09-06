@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1788574074514,
+  "generatedAt": 1788725427301,
   "extensions": [
     {
       "id": "site:cenele",
@@ -49,7 +49,18 @@
       "url": "site.novelfull.js",
       "baseUrl": "https://novelfull.com",
       "icon": "icons/novelfull.png"
+    },
+    {
+      "id": "site:rean",
+      "name": "شبكة ريان",
+      "lang": "ar",
+      "version": "1.0.0",
+      "apiVersion": 1,
+      "size": 21178,
+      "sha256": "1aea355443df1b75ad60c25d1d64a26d58de86ce5a198a75b51788a5cabc0a39",
+      "url": "site.rean.js",
+      "baseUrl": "https://rean.org"
     }
   ],
-  "signature": "_Q7Sx4ddUnboRyCNA5zsvvoWBKlMpGQ-uVH797X7qSB_BYNtNRIUMpHPCcfi3u_O9Jx8vv_yf5nLi38Z0X8ZDw"
+  "signature": "WQW5WtQCeJW_CBhiRNBPhrWAmgcXTq8VXH56maZ95mPcRLmboH7xnwuWnDn3tO19O6i_nfK1cLt5iwBugqyLCQ"
 }

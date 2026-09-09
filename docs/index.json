@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1788732265901,
+  "generatedAt": 1788957904610,
   "extensions": [
     {
       "id": "site:cenele",
@@ -51,17 +51,6 @@
       "icon": "icons/novelfull.png"
     },
     {
-      "id": "site:rean",
-      "name": "شبكة ريان",
-      "lang": "ar",
-      "version": "1.0.1",
-      "apiVersion": 1,
-      "size": 21847,
-      "sha256": "e5c90b02c954141239ce58e99c231e9fbe1fe0a44a1a02f7085f5fdde92f5726",
-      "url": "site.rean.js",
-      "baseUrl": "https://rean.org"
-    },
-    {
       "id": "site:truthnovel",
       "name": "رواية سيد الحقيقة",
       "lang": "ar",
@@ -73,5 +62,5 @@
       "baseUrl": "https://truthnovel.top"
     }
   ],
-  "signature": "C_p20Ms0R0t4yq_YatGWEAK_hPab0g7IkFaUWWGohCkpd8mNNklF6pU1EoPZ2lhO4sDHPE0NoGeCmarmFfsPCg"
+  "signature": "gqUZJCQDqR7fFQwvrem-2mm0zwNXalYpq8KR6g3iHqotZJXhm63e8MEaENX5upo2XIlVnHmt9PjNq5h6DAL9CA"
 }

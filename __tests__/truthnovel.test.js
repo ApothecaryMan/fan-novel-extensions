@@ -46,7 +46,7 @@ describe("site:truthnovel extension", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.1.3");
+    expect(ext.version).toBe("1.1.4");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -116,7 +116,7 @@ describe("site:truthnovel extension", () => {
     </channel></rss>`;
     const ctx = mockCtx({
       "feed/": ok(FEED),
-      "2430-x": ok('<script type="application/ld+json">{"@type":"Article","commentCount":2}</script><div id="comment-10"><div class="wpd-vote"><span class="wpd-vote-result wpd-vote-result-like wpd-up\' title=\'11\'>11</span></div></div>')
+      "2430-x": ok('<script type="application/ld+json">{"@type":"Article","commentCount":2}</script><div id="comment-10"><div class="wpd-vote"><span class="wpd-vote-result wpd-vote-result-like wpd-up\' title=\'11\'>11</span></div></div><div class=\'wmu-comment-attachments\' data-comment-id=\'11\'><a href=\'https://truthnovel.top/wp-content/uploads/2026/09/attach.gif\'><img src=\'https://truthnovel.top/wp-content/uploads/2026/09/attach.gif\' /></a></div>')
     });
     const res = await ext.getComments("https://truthnovel.top/2430-x/", ctx);
     expect(res.count).toBe(2);
@@ -124,7 +124,8 @@ describe("site:truthnovel extension", () => {
     expect(res.comments[1].parentId).toBe("10");
     expect(res.comments[1].body).toContain("اتفق");
     expect(res.comments[1].body).not.toContain("رد");
-    expect(res.comments[1].images).toEqual(["https://truthnovel.top/wp-content/uploads/pic.jpg"]);
+    expect(res.comments[1].images).toEqual(["https://truthnovel.top/wp-content/uploads/pic.jpg", "https://truthnovel.top/wp-content/uploads/2026/09/attach.gif"]);
     expect(res.comments[0].likes).toBe(11);
+    expect(res.comments[1].images).toContain("https://truthnovel.top/wp-content/uploads/2026/09/attach.gif");
   });
 });

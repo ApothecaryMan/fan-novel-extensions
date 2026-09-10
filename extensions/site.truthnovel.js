@@ -25,7 +25,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.1.3",
+  version: "1.1.4",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -415,10 +415,35 @@ registerExtension({
     // Likes: wpDiscuz up-votes rendered in chapter HTML as
     // id="comment-XXXX" ... wpd-vote-result ... title='N'>N. Feed has no
     // votes, so patch counts from the page (missing → 0).
+    // Images: wpDiscuz attachments (wmu-comment-attachments) are NOT in the
+    // RSS feed — merge them from the page by data-comment-id.
     try {
       if (pageHtml) {
+        var attachMap = {};
+        var attRe = /data-comment-id='(\d+)'/g;
+        var attM;
+        while ((attM = attRe.exec(pageHtml)) !== null) {
+          var aid = attM[1];
+          var awin = pageHtml.substr(attM.index, 4000);
+          var urls = awin.match(/https?:\/\/truthnovel\.top\/wp-content\/uploads\/[^'"()\s]+?\.(?:gif|jpe?g|png|webp|bmp)/gi);
+          if (urls) {
+            var uniq = [];
+            for (var ui = 0; ui < urls.length && uniq.length < 4; ui++) {
+              if (uniq.indexOf(urls[ui]) === -1) uniq.push(urls[ui]);
+            }
+            if (uniq.length > 0) attachMap[aid] = uniq;
+          }
+        }
         for (var vi = 0; vi < comments.length; vi++) {
           var cid = comments[vi].id;
+          if (attachMap[cid]) {
+            var merged = (comments[vi].images || []).concat(attachMap[cid]);
+            var dedup = [];
+            for (var mi = 0; mi < merged.length && dedup.length < 4; mi++) {
+              if (dedup.indexOf(merged[mi]) === -1) dedup.push(merged[mi]);
+            }
+            comments[vi].images = dedup;
+          }
           var idx = pageHtml.indexOf('id="comment-' + cid + '"');
           if (idx === -1) continue;
           var window_ = pageHtml.substr(idx, 6000);

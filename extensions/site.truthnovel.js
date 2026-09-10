@@ -25,8 +25,8 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.0.2",
-  apiVersion: 1,
+  version: "1.1.0",
+  apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
   _absUrl: function (url) {
@@ -334,6 +334,102 @@ registerExtension({
 
   getPopularNovels: async function (page, ctx) {
     return this.searchNovels("", page, ctx);
+  },
+
+  // ---------------------------------------------------------------
+  // Site comments — read via WordPress RSS feed per chapter.
+  // Flat list; host builds the reply tree from parentId.
+  // ---------------------------------------------------------------
+  getComments: async function (chapterUrl, ctx) {
+    var fullUrl = this._absUrl(chapterUrl);
+    var count = 0;
+    try {
+      var pageRes = await ctx.xFetch(fullUrl);
+      if (pageRes && pageRes.ok && pageRes.text) {
+        var cc = pageRes.text.match(/"commentCount"\s*:\s*(\d+)/);
+        if (cc) count = parseInt(cc[1], 10);
+      }
+    } catch (e) { /* non-fatal */ }
+
+    var feedUrl = fullUrl.replace(/\/?$/, "/") + "feed/";
+    var feedRes = await ctx.xFetch(feedUrl);
+    if (!feedRes.ok) throw new Error("فشل جلب تعليقات الفصل: " + feedRes.status);
+    var xml = feedRes.text || "";
+    var comments = [];
+    var itemRegex = /<item>([\s\S]*?)<\/item>/gi;
+    var im;
+    while ((im = itemRegex.exec(xml)) !== null) {
+      var item = im[1];
+      var linkM = item.match(/<link>([\s\S]*?)<\/link>/i);
+      var link = linkM ? linkM[1].trim() : "";
+      var idM = link.match(/#comment-(\d+)/);
+      if (!idM) {
+        var guidM = item.match(/#comment-(\d+)/);
+        if (!guidM) continue;
+        idM = guidM;
+      }
+      var id = idM[1];
+      var authorM = item.match(/<dc:creator><!\[CDATA\[([\s\S]*?)\]\]><\/dc:creator>/i)
+        || item.match(/<dc:creator>([\s\S]*?)<\/dc:creator>/i);
+      var author = authorM ? this._stripTags(authorM[1]).trim() || "—" : "—";
+      var dateM = item.match(/<pubDate>([\s\S]*?)<\/pubDate>/i);
+      var createdAt = dateM ? Date.parse(dateM[1].trim()) : NaN;
+      if (isNaN(createdAt)) createdAt = Date.now();
+      var bodyM = item.match(/<content:encoded><!\[CDATA\[([\s\S]*?)\]\]><\/content:encoded>/i)
+        || item.match(/<description><!\[CDATA\[([\s\S]*?)\]\]><\/description>/i);
+      var rawBody = bodyM ? bodyM[1] : "";
+      // Reply parent: "ردًا على <a href="...#comment-XXXX">" — ignore self-link
+      var parentId = null;
+      var pm = rawBody.match(/#comment-(\d+)/);
+      if (pm && pm[1] !== id) parentId = pm[1];
+      var body = this._decodeEntities(this._stripTags(rawBody.replace(/<a[^>]*>[\s\S]*?<\/a>/gi, " "))).trim();
+      if (!body) continue;
+      comments.push({ id: id, parentId: parentId, author: author, body: body, createdAt: createdAt, likes: 0, url: link });
+    }
+    comments.sort(function (a, b) { return a.createdAt - b.createdAt; });
+    if (!count) count = comments.length;
+    return { count: count, comments: comments };
+  },
+
+  // ---------------------------------------------------------------
+  // Guest post to wpDiscuz (host enforces app login; author = username).
+  // ---------------------------------------------------------------
+  postComment: async function (chapterUrl, input, ctx) {
+    var fullUrl = this._absUrl(chapterUrl);
+    var pageRes = await ctx.xFetch(fullUrl);
+    if (!pageRes.ok) throw new Error("فشل فتح صفحة الفصل: " + pageRes.status);
+    var html = pageRes.text || "";
+    var postIdM = html.match(/"wc_post_id"\s*:\s*"(\d+)"/) || html.match(/wc_post_id["']?\s*[:=]\s*["']?(\d+)/);
+    if (!postIdM) throw new Error("تعذر تحديد معرف المقال");
+    var postId = postIdM[1];
+    var nonceM = html.match(/wpdiscuz_nonce["']?\s*[:=]\s*["']([a-zA-Z0-9]+)["']/);
+    var author = (input && input.author || "").trim().slice(0, 50);
+    var email = (input && input.email || "").trim().slice(0, 100);
+    var body = (input && input.body || "").trim();
+    if (!author || !body) throw new Error("الاسم والنص مطلوبان");
+    var parentRaw = input && input.parentId ? String(input.parentId).replace(/\D/g, "") : "";
+    var params = "action=wpdAddComment&post_id=" + encodeURIComponent(postId)
+      + "&parent=" + encodeURIComponent(parentRaw || "0")
+      + "&author=" + encodeURIComponent(author)
+      + "&email=" + encodeURIComponent(email)
+      + "&content=" + encodeURIComponent(body);
+    if (nonceM) params += "&nonce=" + encodeURIComponent(nonceM[1]);
+    var ajaxUrl = this._absUrl("/wp-admin/admin-ajax.php");
+    var res = await ctx.xFetch(ajaxUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "X-Requested-With": "XMLHttpRequest" },
+      body: params
+    });
+    if (!res.ok) throw new Error("فشل إرسال التعليق: " + res.status);
+    var data;
+    try { data = JSON.parse(res.text); } catch (e) { throw new Error("رد غير متوقع من الموقع"); }
+    var payload = data && data.data ? data.data : data;
+    if (data && data.success === false) {
+      throw new Error((payload && payload.message) || "رفض الموقع التعليق");
+    }
+    var newId = payload && (payload.comment_id || payload.commentId) ? String(payload.comment_id || payload.commentId) : undefined;
+    var held = payload && (payload.held_for_moderation || payload.moderation) ? true : false;
+    return { ok: true, id: newId, needsModeration: held };
   },
 
   getCategories: async function () {

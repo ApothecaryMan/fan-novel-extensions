@@ -46,7 +46,7 @@ describe("site:truthnovel extension", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.1.2");
+    expect(ext.version).toBe("1.1.3");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -112,7 +112,7 @@ describe("site:truthnovel extension", () => {
       <dc:creator><![CDATA[B]]></dc:creator><pubDate>Thu, 10 Sep 2026 12:00:00 +0000</pubDate>
       <guid>https://truthnovel.top/?p=1#comment-11</guid>
       <description><![CDATA[ردًا على <a href="https://truthnovel.top/x/#comment-10">A</a>. اتفق]]></description>
-      <content:encoded><![CDATA[<p>ردًا على <a href="https://truthnovel.top/x/#comment-10">A</a>.</p><p>اتفق</p>]]></content:encoded></item>
+      <content:encoded><![CDATA[<p>ردًا على <a href="https://truthnovel.top/x/#comment-10">A</a>.</p><p>اتفق</p><p><img src="https://truthnovel.top/wp-content/uploads/pic.jpg" /><img src="https://s.w.org/images/core/emoji/smile.png" class="wp-smiley" /></p>]]></content:encoded></item>
     </channel></rss>`;
     const ctx = mockCtx({
       "feed/": ok(FEED),
@@ -123,6 +123,8 @@ describe("site:truthnovel extension", () => {
     expect(res.comments.length).toBe(2);
     expect(res.comments[1].parentId).toBe("10");
     expect(res.comments[1].body).toContain("اتفق");
+    expect(res.comments[1].body).not.toContain("رد");
+    expect(res.comments[1].images).toEqual(["https://truthnovel.top/wp-content/uploads/pic.jpg"]);
     expect(res.comments[0].likes).toBe(11);
   });
 });

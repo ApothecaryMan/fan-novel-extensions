@@ -25,7 +25,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.1.2",
+  version: "1.1.3",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -384,9 +384,33 @@ registerExtension({
       var parentId = null;
       var pm = rawBody.match(/#comment-(\d+)/);
       if (pm && pm[1] !== id) parentId = pm[1];
-      var body = this._decodeEntities(this._stripTags(rawBody.replace(/<a[^>]*>[\s\S]*?<\/a>/gi, " "))).trim();
-      if (!body) continue;
-      comments.push({ id: id, parentId: parentId, author: author, body: body, createdAt: createdAt, likes: 0, url: link });
+      // Attachment images (wpDiscuz uploads). Skip WP smiley/emoji so they
+      // don't render as full-width attachments (they stay as text).
+      var images = [];
+      try {
+        var imgRegex = /<img[^>]*>/gi;
+        var imgM;
+        while ((imgM = imgRegex.exec(rawBody)) !== null && images.length < 4) {
+          var tag = imgM[0];
+          if (/wp-smiley/i.test(tag) || /s\.w\.org\/images/i.test(tag)) continue;
+          var srcM = tag.match(/src=["']([^"']+)["']/i);
+          if (srcM && /^https?:\/\//i.test(srcM[1]) && images.indexOf(srcM[1]) === -1) {
+            images.push(srcM[1]);
+          }
+        }
+      } catch (e3) { /* non-fatal */ }
+      // Drop the "ردًا على ..." reference paragraph — threading already
+      // shows the reply nesting, so keeping it duplicates it on every reply.
+      var cleanHtml = rawBody
+        .replace(/<p[^>]*>\s*رد[^<]*<a[^>]*>[\s\S]*?<\/a>\s*\.?\s*<\/p>/gi, " ")
+        .replace(/<a[^>]*>[\s\S]*?<\/a>/gi, " ")
+        .replace(/<img[^>]*>/gi, " ");
+      var body = this._decodeEntities(this._stripTags(cleanHtml)).trim();
+      body = body.replace(/^رد[ً'’]?\s*ا?\s*على\s*\.?\s*/i, "").trim();
+      if (!body && images.length === 0) continue;
+      var comment = { id: id, parentId: parentId, author: author, body: body, createdAt: createdAt, likes: 0, url: link };
+      if (images.length > 0) comment.images = images;
+      comments.push(comment);
     }
     // Likes: wpDiscuz up-votes rendered in chapter HTML as
     // id="comment-XXXX" ... wpd-vote-result ... title='N'>N. Feed has no

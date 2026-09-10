@@ -61,7 +61,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.9.3',
+  version: '1.9.4',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -517,7 +517,8 @@ registerExtension({
     if (!res.ok) throw new Error('فشل جلب نص الفصل: ' + res.status);
     var html = res.text;
 
-    var panelMatch = html.match(/<novel-chapter[^>]*>([\s\S]*?)<\/novel-chapter>/i) ||
+    var panelMatch = html.match(/<text-canvas[^>]*>([\s\S]*?)<\/text-canvas>/i) ||
+                     html.match(/<novel-chapter[^>]*>([\s\S]*?)<\/novel-chapter>/i) ||
                      html.match(/<div[^>]*\bid="chapter-[^"]*"[^>]*class="[^"]*reading-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i) ||
                      html.match(/<div[^>]*class="[^"]*reading-content[^"]*\bcurrent\b[^"]*"[^>]*>([\s\S]*?)<\/div>/i) ||
                      html.match(/<div[^>]*class="[^"]*reading-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
@@ -526,6 +527,8 @@ registerExtension({
     var body = panelMatch[1]
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
       .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<figure[^>]*data-nosnippet[^>]*>[\s\S]*?<\/figure>/gi, '')
+      .replace(/<figure[^>]*class="[^"]*r[0-9a-f]{12,}[^"]*"[^>]*>[\s\S]*?<\/figure>/gi, '')
       .replace(/<blockquote[^>]*>[\s\S]*?<\/blockquote>/gi, '')
       .replace(/<aside[^>]*>[\s\S]*?<\/aside>/gi, '')
       .replace(/<div[^>]*class="[^"]*nhv-reading-chapter-head[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '')
@@ -537,6 +540,7 @@ registerExtension({
     while ((bm = blockRegex.exec(body)) !== null) {
       var text = this._decodeEntities(this._stripTags(bm[1]));
       if (!text) continue;
+      if (/هذا التطبيق يسرق|يسرق من موقع/.test(text)) continue;
       if (/^(نهاية الفصل|تم الفصل|الفصل التالي|انتهى الفصل|النهاية|تمت)/.test(text)) break;
       if (/^[-ـ—_]{3,}$/.test(text)) continue;
       if (/^بسم الله/.test(text)) continue;

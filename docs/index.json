@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1788957904610,
+  "generatedAt": 1789054251085,
   "extensions": [
     {
       "id": "site:cenele",
       "name": "فضاء الروايات",
       "lang": "ar",
-      "version": "1.9.3",
+      "version": "1.9.4",
       "apiVersion": 1,
-      "size": 31859,
-      "sha256": "43cd76edc4e8c9bf768ba3c9a88d38e10108dc9f94285418086aba37390ce808",
+      "size": 32198,
+      "sha256": "634c0e15276729c2c906f81cc9b54e656a5795756b391b042ece0125854797be",
       "url": "site.cenele.js",
       "baseUrl": "https://cenele.com",
       "icon": "icons/cenele.png"
@@ -62,5 +62,5 @@
       "baseUrl": "https://truthnovel.top"
     }
   ],
-  "signature": "gqUZJCQDqR7fFQwvrem-2mm0zwNXalYpq8KR6g3iHqotZJXhm63e8MEaENX5upo2XIlVnHmt9PjNq5h6DAL9CA"
+  "signature": "_uodIfo-vX_gzVDGDwDB2otGICPCnzq60Yt236ioUE9atxEs9YUgoCFHQA9Un-Lx9WHfX0J643_lx8Ymz8WXCQ"
 }

@@ -25,7 +25,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.1.1",
+  version: "1.1.2",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -343,10 +343,12 @@ registerExtension({
   getComments: async function (chapterUrl, ctx) {
     var fullUrl = this._absUrl(chapterUrl);
     var count = 0;
+    var pageHtml = "";
     try {
       var pageRes = await ctx.xFetch(fullUrl);
       if (pageRes && pageRes.ok && pageRes.text) {
-        var cc = pageRes.text.match(/"commentCount"\s*:\s*(\d+)/);
+        pageHtml = pageRes.text;
+        var cc = pageHtml.match(/"commentCount"\s*:\s*(\d+)/);
         if (cc) count = parseInt(cc[1], 10);
       }
     } catch (e) { /* non-fatal */ }
@@ -386,6 +388,24 @@ registerExtension({
       if (!body) continue;
       comments.push({ id: id, parentId: parentId, author: author, body: body, createdAt: createdAt, likes: 0, url: link });
     }
+    // Likes: wpDiscuz up-votes rendered in chapter HTML as
+    // id="comment-XXXX" ... wpd-vote-result ... title='N'>N. Feed has no
+    // votes, so patch counts from the page (missing → 0).
+    try {
+      if (pageHtml) {
+        for (var vi = 0; vi < comments.length; vi++) {
+          var cid = comments[vi].id;
+          var idx = pageHtml.indexOf('id="comment-' + cid + '"');
+          if (idx === -1) continue;
+          var window_ = pageHtml.substr(idx, 6000);
+          var vm = window_.match(/wpd-vote-result[^>]*title='(-?\d+)'/);
+          if (vm) {
+            var v = parseInt(vm[1], 10);
+            if (!isNaN(v) && v >= 0) comments[vi].likes = v;
+          }
+        }
+      }
+    } catch (e2) { /* non-fatal: keep 0 */ }
     comments.sort(function (a, b) { return a.createdAt - b.createdAt; });
     if (!count) count = comments.length;
     return { count: count, comments: comments };

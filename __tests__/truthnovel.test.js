@@ -46,7 +46,7 @@ describe("site:truthnovel extension", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.1.1");
+    expect(ext.version).toBe("1.1.2");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -102,8 +102,7 @@ describe("site:truthnovel extension", () => {
     expect(results[0].coverUrl).toContain("truthnovel.top/wp-content/uploads/");
   });
 
-  it("parses site comments from feed with reply threading", async () => {
-    const FEED = `<?xml version="1.0"?><rss><channel>
+  it("parses site comments from feed with reply threading", async () => {    const FEED = `<?xml version="1.0"?><rss><channel>
       <item><title>بواسطة: A</title><link>https://truthnovel.top/x/#comment-10</link>
       <dc:creator><![CDATA[A]]></dc:creator><pubDate>Thu, 10 Sep 2026 11:00:00 +0000</pubDate>
       <guid>https://truthnovel.top/?p=1#comment-10</guid>
@@ -117,12 +116,13 @@ describe("site:truthnovel extension", () => {
     </channel></rss>`;
     const ctx = mockCtx({
       "feed/": ok(FEED),
-      "2430-x": ok('<script type="application/ld+json">{"@type":"Article","commentCount":2}</script>')
+      "2430-x": ok('<script type="application/ld+json">{"@type":"Article","commentCount":2}</script><div id="comment-10"><div class="wpd-vote"><span class="wpd-vote-result wpd-vote-result-like wpd-up\' title=\'11\'>11</span></div></div>')
     });
     const res = await ext.getComments("https://truthnovel.top/2430-x/", ctx);
     expect(res.count).toBe(2);
     expect(res.comments.length).toBe(2);
     expect(res.comments[1].parentId).toBe("10");
     expect(res.comments[1].body).toContain("اتفق");
+    expect(res.comments[0].likes).toBe(11);
   });
 });

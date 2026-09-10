@@ -25,7 +25,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.1.0",
+  version: "1.1.1",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -417,7 +417,7 @@ registerExtension({
     var ajaxUrl = this._absUrl("/wp-admin/admin-ajax.php");
     var res = await ctx.xFetch(ajaxUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "X-Requested-With": "XMLHttpRequest" },
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
       body: params
     });
     if (!res.ok) throw new Error("فشل إرسال التعليق: " + res.status);

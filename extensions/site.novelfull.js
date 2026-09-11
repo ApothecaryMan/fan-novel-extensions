@@ -8,7 +8,7 @@ registerExtension({
   id: 'site:novelfull',
   name: 'NovelFull',
   lang: 'en',
-  version: '1.2.1',
+  version: '1.2.2',
   apiVersion: 1,
   baseUrl: 'https://novelfull.com',
 
@@ -24,6 +24,38 @@ registerExtension({
 
   _stripTags: function (html) {
     return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  },
+
+  _extractImgSrc: function (tag) {
+    if (!tag) return undefined;
+    var m = tag.match(/\bdata-original\s*=\s*"([^"]+)"/i) ||
+            tag.match(/\bdata-original\s*=\s*'([^']+)'/i) ||
+            tag.match(/\bdata-lazy-src\s*=\s*"([^"]+)"/i) ||
+            tag.match(/\bdata-lazy-src\s*=\s*'([^']+)'/i) ||
+            tag.match(/\bdata-src\s*=\s*"([^"]+)"/i) ||
+            tag.match(/\bdata-src\s*=\s*'([^']+)'/i) ||
+            tag.match(/\bsrc\s*=\s*"([^"]+)"/i) ||
+            tag.match(/\bsrc\s*=\s*'([^']+)'/i);
+    if (!m) return undefined;
+    var src = (m[1] || '').trim();
+    if (!src || src.indexOf('data:') === 0 || src.indexOf('blank.') !== -1) return undefined;
+    return src;
+  },
+
+  _extractCoverFromCard: function (card) {
+    // Live markup puts src BEFORE class: <img src="..." class="cover" ...>.
+    // So first find the <img> tag that carries the cover class (any attr order),
+    // then pull src / data-src / data-original from it.
+    var tagMatch = card.match(/<img[^>]*class="[^"]*cover[^"]*"[^>]*>/i);
+    var src = this._extractImgSrc(tagMatch ? tagMatch[0] : null);
+    if (src) return this._absUrl(src);
+    // Fallback: first usable <img> in the card (search rows always carry one).
+    var allImgs = card.match(/<img[^>]*>/gi) || [];
+    for (var i = 0; i < allImgs.length; i++) {
+      var s = this._extractImgSrc(allImgs[i]);
+      if (s) return this._absUrl(s);
+    }
+    return undefined;
   },
 
   _decodeEntities: function (str) {
@@ -134,11 +166,24 @@ registerExtension({
     if (!title) title = (html.match(/<title>([^<]+)<\/title>/i) || [])[1];
     if (title) title = this._decodeEntities(this._stripTags(title)).replace(/\s*(\|Novelfull|- Novelfull)/i, '').trim();
 
-    var coverMatch = html.match(/<div[^>]*class="[^"]*info-holder[^"]*"[^>]*>[\s\S]*?<div class="book">[\s\S]*?<img[^>]+src="([^">]+)"/i) ||
-                     html.match(/<img[^>]+class="[^"]*cover[^"]*"[^>]+src="([^">]+)"/i) ||
-                     html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i);
-    var coverUrl = coverMatch ? coverMatch[1].trim() : undefined;
-    if (coverUrl && coverUrl.charAt(0) === '/') coverUrl = this._absUrl(coverUrl);
+    var infoHolderIdx = html.search(/class="[^"]*info-holder[^"]*"/i);
+    var infoRegion = infoHolderIdx !== -1 ? html.slice(infoHolderIdx, infoHolderIdx + 8000) : html;
+    var bookImgTag = infoRegion.match(/<div[^>]*class="[^"]*\bbook\b[^"]*"[^>]*>[\s\S]*?(<img[^>]*>)/i);
+    var coverSrc = this._extractImgSrc(bookImgTag ? bookImgTag[1] : null);
+    if (!coverSrc) {
+      var coverImgTag = html.match(/<img[^>]*class="[^"]*cover[^"]*"[^>]*>/i);
+      coverSrc = this._extractImgSrc(coverImgTag ? coverImgTag[0] : null);
+    }
+    var coverUrl;
+    if (coverSrc) {
+      coverUrl = coverSrc.indexOf('http') === 0 ? coverSrc : this._absUrl(coverSrc);
+    } else {
+      var ogImg = html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i);
+      if (ogImg) {
+        var ogSrc = ogImg[1].trim();
+        coverUrl = ogSrc.indexOf('http') === 0 ? ogSrc : this._absUrl(ogSrc);
+      }
+    }
 
     // info meta rows: "<div><h3>Field:</h3>value</div>"
     function metaRow(field) {
@@ -265,26 +310,68 @@ registerExtension({
     return 1;
   },
 
+  _extractChapterDate: function (liBlock) {
+    if (!liBlock) return undefined;
+    // <time datetime="...">2024-01-02 ...</time> — prefer machine-readable attr.
+    var dt = liBlock.match(/<time[^>]+datetime="([^"]+)"/i);
+    if (dt) {
+      var parsedDt = this._parseDate(dt[1]);
+      if (parsedDt !== undefined) return parsedDt;
+    }
+    // Explicit date/time spans some mirrors render next to the chapter link.
+    var span = liBlock.match(/<span[^>]*class="[^"]*(?:chapter-time|chapter-date|time|date|update-time|updated)[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
+    if (span) {
+      var parsedSpan = this._parseDate(this._stripTags(span[1]));
+      if (parsedSpan !== undefined) return parsedSpan;
+    }
+    return undefined;
+  },
+
   _parseChapterPage: function (html) {
     var chapters = [];
     // Only the full paginated list: <ul class="list-chapter"> ... <li><a href=".."><span class="chapter-text">Chapter N: T</span></a></li>
+    // Parse per-<li> so a date rendered inside the same row (<time>, .chapter-time)
+    // can be attached to its chapter as uploadedAt.
     var listStart = html.indexOf('id="list-chapter"');
     var region = listStart !== -1 ? html.slice(listStart) : html;
-    var itemRegex = /<a[^>]+href="([^"]+)"[^>]*>[\s\S]*?<span[^>]*class="[^"]*chapter-text[^"]*"[^>]*>([\s\S]*?)<\/span>/gi;
-    var match;
-    while ((match = itemRegex.exec(region)) !== null) {
-      var href = match[1].trim();
+    var liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
+    var liMatch;
+    var fallbackItems = [];
+    while ((liMatch = liRegex.exec(region)) !== null) {
+      var li = liMatch[1];
+      var aMatch = li.match(/<a[^>]+href="([^"]+)"[^>]*>[\s\S]*?<span[^>]*class="[^"]*chapter-text[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
+      if (!aMatch) continue;
+      var href = aMatch[1].trim();
       if (href.indexOf('chapter-') === -1 && !/chapter/i.test(href)) continue;
-      var rawTitle = this._decodeEntities(this._stripTags(match[2]));
+      var rawTitle = this._decodeEntities(this._stripTags(aMatch[2]));
 
       var numParsed = rawTitle.match(/(?:^|\b)chapter\s*[:.#\-–—]?\s*(\d+)/i) || rawTitle.match(/(\d+)\s*[:.\-–—]/);
       var chapterNumber = numParsed ? parseInt(numParsed[1], 10) : 0;
 
       var title = this._stripChapterPrefix(rawTitle);
+      var uploadedAt = this._extractChapterDate(li);
 
-      chapters.push({ url: this._absUrl(href), number: chapterNumber, title: title });
+      var item = { url: this._absUrl(href), number: chapterNumber, title: title };
+      if (uploadedAt !== undefined) item.uploadedAt = uploadedAt;
+      chapters.push(item);
     }
-    return chapters;
+    if (chapters.length > 0) return chapters;
+    // Fallback for markup without <li> wrappers.
+    var itemRegex = /<a[^>]+href="([^"]+)"[^>]*>[\s\S]*?<span[^>]*class="[^"]*chapter-text[^"]*"[^>]*>([\s\S]*?)<\/span>/gi;
+    var match;
+    while ((match = itemRegex.exec(region)) !== null) {
+      var href2 = match[1].trim();
+      if (href2.indexOf('chapter-') === -1 && !/chapter/i.test(href2)) continue;
+      var rawTitle2 = this._decodeEntities(this._stripTags(match[2]));
+
+      var numParsed2 = rawTitle2.match(/(?:^|\b)chapter\s*[:.#\-–—]?\s*(\d+)/i) || rawTitle2.match(/(\d+)\s*[:.\-–—]/);
+      var chapterNumber2 = numParsed2 ? parseInt(numParsed2[1], 10) : 0;
+
+      var title2 = this._stripChapterPrefix(rawTitle2);
+
+      fallbackItems.push({ url: this._absUrl(href2), number: chapterNumber2, title: title2 });
+    }
+    return fallbackItems.length ? fallbackItems : chapters;
   },
 
   // ---------------------------------------------------------------
@@ -361,7 +448,7 @@ registerExtension({
       var title = this._decodeEntities(this._stripTags(link[2]));
       if (!title) continue;
 
-      var cov = (card.match(/<img[^>]+class="[^"]*cover[^"]*"[^>]+src="([^">]+)"/i) || ['', ''])[1];
+      var coverUrl = this._extractCoverFromCard(card);
       var authorMatch = (card.match(/class="[^"]*author[^"]*"[^>]*>[\s\S]*?glyphicon[^"]*"[^>]*>[\s\S]*?<\/span>([\s\S]*?)<\/span>/i) || ['', ''])[1];
       var author = authorMatch ? this._decodeEntities(this._stripTags(authorMatch)) : '';
       var statusStatus = card.match(/href="[^"]*\/status\/([^"]+)"/i);
@@ -371,7 +458,7 @@ registerExtension({
         source: this.id,
         url: novelUrl,
         title: title,
-        coverUrl: cov ? this._absUrl(cov.trim()) : undefined,
+        coverUrl: coverUrl,
         author: author || 'Unknown',
         category: 'Translated Novels',
         status: (statusRaw && /complete/i.test(statusRaw)) ? 'مكتملة' : 'مستمرة'

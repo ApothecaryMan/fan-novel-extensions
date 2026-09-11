@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1789129761691,
+  "generatedAt": 1789141999243,
   "extensions": [
     {
       "id": "site:cenele",
@@ -42,10 +42,10 @@
       "id": "site:novelfull",
       "name": "NovelFull",
       "lang": "en",
-      "version": "1.2.1",
+      "version": "1.2.2",
       "apiVersion": 1,
-      "size": 18353,
-      "sha256": "45a17cd800442118cc37d6912d89d952475ed6b0d6955ddebf24c7c7287c2c18",
+      "size": 22184,
+      "sha256": "e08ea123e2d8500c1b02a7beb00c20b415bceb791dc0da602c0760bc652a896c",
       "url": "site.novelfull.js",
       "baseUrl": "https://novelfull.com",
       "icon": "icons/novelfull.png"
@@ -62,5 +62,5 @@
       "baseUrl": "https://truthnovel.top"
     }
   ],
-  "signature": "6v5in8D6l295gGrllsDbE3f1o6nCaY6BVPatlbrtwWJwVeLtyYlWL7RI6Ht_0o04Z1t6KOnBMMROTaU6XmROBA"
+  "signature": "eonNnxom47AQ3rxLQTnVXM4T4veXIVfv02_Q2-bi5odttQqGR3iiHecb-UV-gXayKB0Ach9K5z44fzGjpjJDBg"
 }

@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1789146022304,
+  "generatedAt": 1789147540433,
   "extensions": [
     {
       "id": "site:cenele",
       "name": "فضاء الروايات",
       "lang": "ar",
-      "version": "1.9.4",
+      "version": "1.9.5",
       "apiVersion": 1,
-      "size": 32198,
-      "sha256": "634c0e15276729c2c906f81cc9b54e656a5795756b391b042ece0125854797be",
+      "size": 34154,
+      "sha256": "2971bbfe7f27436bbb8c7397b25c7b00830c611be246d010724c62df4c3497f3",
       "url": "site.cenele.js",
       "baseUrl": "https://cenele.com",
       "icon": "icons/cenele.png"
@@ -30,10 +30,10 @@
       "id": "site:kolnovel",
       "name": "كول نوفيل",
       "lang": "ar",
-      "version": "1.5.2",
+      "version": "1.5.3",
       "apiVersion": 1,
-      "size": 34529,
-      "sha256": "4f2af4868fb473d49f1ab25228b827a06f229a4842527b8f40791a556ace0a67",
+      "size": 35885,
+      "sha256": "4cb381025a34219a5b7558d74a780b8ed83f20ec0df8c958d462d1eda9e68c13",
       "url": "site.kolnovel.js",
       "baseUrl": "https://kolnovel.com",
       "icon": "icons/kolnovel.png"
@@ -44,8 +44,8 @@
       "lang": "en",
       "version": "1.2.4",
       "apiVersion": 1,
-      "size": 21554,
-      "sha256": "d80248faee6c6bfc27d23cf2323f53c7a5a204c796259b9932a03c25c86e1b38",
+      "size": 21251,
+      "sha256": "5404d2fe2b4dfa031ecbf3436ddc4473f0126463e166a267a63d275ddd741992",
       "url": "site.novelfull.js",
       "baseUrl": "https://novelfull.com",
       "icon": "icons/novelfull.png"
@@ -67,12 +67,12 @@
       "lang": "en",
       "version": "1.0.0",
       "apiVersion": 1,
-      "size": 17149,
-      "sha256": "0ee5940c6bbd73192130c7af41c86f030d53b30ef2bcd4a75ad87619a1eac231",
+      "size": 17023,
+      "sha256": "44d14f7ef112ff37e887e1ac9d90daaadb190dd9ab2eb5dbde3bda5053e3731d",
       "url": "site.wuxiaworld.js",
       "baseUrl": "https://lite.wuxiaworld.com",
       "icon": "icons/wuxiaworld.png"
     }
   ],
-  "signature": "On2aY4m5o6HUaIixtoV0sytgG9Jca-ydJfd2MWGcqhqTy7ruwiFjoPxHavXeZ-pysNar7b14p3hU-zuxBBMgDw"
+  "signature": "KRBeFjXcHMJppcfES4oy1IUVUelC7VB96RwLm9DxlwCgmwXO9Z0iFR_tRQ8mDDj4qxnNBAwU_CMtpIw8SaRwCQ"
 }

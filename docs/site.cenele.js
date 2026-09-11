@@ -61,7 +61,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.9.4',
+  version: '1.9.5',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -474,8 +474,51 @@ registerExtension({
       summary = this._decodeEntities(this._stripTags(block)).replace(/[\s{]+$/g, '');
     }
 
-    // The detail page exposes only numeric genre IDs (no names); browse/search
-    // cards provide genres as tags, and the app preserves those preview tags.
+    // Genres: <div class="nhv-novel-genres"><a href=".../cont-genre/X/">name</a>...
+    var tags;
+    var genreSection = html.match(/<div[^>]*class="[^"]*nhv-novel-genres[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+    if (genreSection) {
+      var collected = [];
+      var genreRe = /<a[^>]*>([^<]+)<\/a>/gi;
+      var gm;
+      while ((gm = genreRe.exec(genreSection[1])) !== null) {
+        var g = this._decodeEntities(gm[1].trim());
+        if (g && collected.indexOf(g) === -1) collected.push(g);
+      }
+      if (collected.length) tags = collected;
+    }
+    if (!tags) {
+      // Fallback: any /cont-genre/ links on the page (menu lists them too).
+      var fbCollected = [];
+      var fbRe = /href="[^"]*\/cont-genre\/[^"]*"[^>]*>([^<]+)<\/a>/gi;
+      var fm;
+      while ((fm = fbRe.exec(html)) !== null) {
+        var fg = this._decodeEntities(this._stripTags(fm[1]).trim());
+        if (!fg || fg === 'الروايات المكتملة' || fg === 'الروايات المستمرة') continue;
+        if (fbCollected.indexOf(fg) === -1) fbCollected.push(fg);
+        if (fbCollected.length >= 20) break;
+      }
+      if (fbCollected.length) tags = fbCollected;
+    }
+
+    // Rating: <span class="nhv-simple-rating__avg">8.1</span><span ...>/ 10</span>
+    // The app scale is 0..5, the site scale is 0..10 → divide by 2.
+    var rating;
+    var readersCount;
+    var avgMatch = html.match(/<span[^>]*class="[^"]*nhv-simple-rating__avg[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
+    if (avgMatch) {
+      var avgNum = parseFloat(this._toLatinDigits(this._stripTags(avgMatch[1]).replace(',', '.')));
+      if (!isNaN(avgNum) && avgNum > 0) {
+        rating = Math.round((avgNum / 2) * 10) / 10;
+        if (rating > 5) rating = 5;
+      }
+    }
+    var countMatch = html.match(/<span[^>]*class="[^"]*nhv-simple-rating__count[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
+    if (countMatch) {
+      var countNum = this._toLatinDigits(this._stripTags(countMatch[1])).replace(/[^\d]/g, '');
+      if (countNum) readersCount = countNum;
+    }
+
     return {
       source: this.id,
       url: fullUrl,
@@ -485,7 +528,10 @@ registerExtension({
       summary: summary,
       status: isCompleted ? 'مكتملة' : 'مستمرة',
       totalChapters: undefined,
-      category: 'روايات مترجمة'
+      category: tags && tags.length ? tags[0] : undefined,
+      tags: tags,
+      rating: rating,
+      readersCount: readersCount
     };
   },
 

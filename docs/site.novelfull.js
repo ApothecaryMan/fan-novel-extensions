@@ -223,17 +223,12 @@ registerExtension({
     var html = await this._fetchCached(base, ctx);
     var pages = this._totalPages(html);
 
-    // Open-date fallback: the site publishes no chapter dates, so stamp every
-    // chapter with this crawl's start time. Captured once so all chapters share
-    // one consistent timestamp.
-    var fetchedAt = Date.now();
-
     // Per-page slots merged in order after all workers finish, so page results
     // can never overwrite each other. A page that fails twice is skipped instead
     // of failing the whole 80-page crawl (Cloudflare 403s are common on this
     // host) — a partial list beats an empty one, and the next refresh converges.
     var slots = [];
-    slots[0] = this._parseChapterPage(html, fetchedAt);
+    slots[0] = this._parseChapterPage(html);
 
     var self = this;
     var pageTasks = [];
@@ -257,7 +252,7 @@ registerExtension({
           }
         }
         if (pageHtml) {
-          var pageChaps = self._parseChapterPage(pageHtml, fetchedAt);
+          var pageChaps = self._parseChapterPage(pageHtml);
           if (pageChaps.length) slots[cur - 1] = pageChaps;
         }
       }
@@ -315,11 +310,11 @@ registerExtension({
     return 1;
   },
 
-  _parseChapterPage: function (html, fetchedAt) {
+  _parseChapterPage: function (html) {
     var chapters = [];
     // Only the full paginated list: <ul class="list-chapter"> ... <li><a href=".."><span class="chapter-text">Chapter N: T</span></a></li>
-    // novelfull.com publishes no per-chapter dates, so every chapter is stamped
-    // with the crawl time (fetchedAt) as an open-date fallback.
+    // novelfull.com publishes no per-chapter dates, so chapters carry no
+    // uploadedAt — a missing date must never read as "released today".
     var listStart = html.indexOf('id="list-chapter"');
     var region = listStart !== -1 ? html.slice(listStart) : html;
     var liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
@@ -338,7 +333,7 @@ registerExtension({
 
       var title = this._stripChapterPrefix(rawTitle);
 
-      var item = { url: this._absUrl(href), number: chapterNumber, title: title, uploadedAt: fetchedAt };
+      var item = { url: this._absUrl(href), number: chapterNumber, title: title };
       chapters.push(item);
     }
     if (chapters.length > 0) return chapters;
@@ -355,7 +350,7 @@ registerExtension({
 
       var title2 = this._stripChapterPrefix(rawTitle2);
 
-      fallbackItems.push({ url: this._absUrl(href2), number: chapterNumber2, title: title2, uploadedAt: fetchedAt });
+      fallbackItems.push({ url: this._absUrl(href2), number: chapterNumber2, title: title2 });
     }
     return fallbackItems.length ? fallbackItems : chapters;
   },

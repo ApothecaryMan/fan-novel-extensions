@@ -27,7 +27,7 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:kolnovel'));
   it('has correct name', () => expect(ext.name).toBe('كول نوفيل'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.5.2'));
+  it('has correct version', () => expect(ext.version).toBe('1.5.3'));
   it('has apiVersion 1', () => expect(ext.apiVersion).toBe(1));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://kolnovel.com'));
 
@@ -334,11 +334,45 @@ describe('parseNovelInfo', () => {
     expect(info.category).toBe('مغامرة');
   });
 
-  it('defaults category when no genres found', async () => {
+  it('returns undefined category/tags when no genres found (no fake default)', async () => {
     const ctx = mockCtx({ '/novel-nogenre': ok(NOVEL_PAGE_NO_GENRES) });
     const info = await ext.parseNovelInfo('/novel-nogenre', ctx);
-    expect(info.category).toBe('روايات مترجمة');
-    expect(info.tags).toEqual([]);
+    expect(info.category).toBeUndefined();
+    expect(info.tags).toBeUndefined();
+  });
+
+  it('parses genres when .sertogenre nests a heading div (live-site layout)', async () => {
+    // Live kolnovel.com wraps a <div class="series-card-heading"> inside
+    // .sertogenre; the old non-greedy </div> regex stopped at the heading and
+    // lost every genre.
+    const nested = NOVEL_PAGE.replace(
+      '<div class="sertogenre">',
+      '<div class="sertogenre"><div class="series-card-heading sertogenre-title">التصنيفات</div>'
+    );
+    const ctx = mockCtx({ '/novel-nested': ok(nested) });
+    const info = await ext.parseNovelInfo('/novel-nested', ctx);
+    expect(info.tags).toEqual(['مغامرة', 'خيال', 'أكشن']);
+    expect(info.category).toBe('مغامرة');
+  });
+
+  it('parses detail-page rating from .custom-rating-value', async () => {
+    const rated = NOVEL_PAGE.replace(
+      '</body>',
+      '<div id="kol-series-rating"><span class="custom-rating-value">4.5 / 5</span></div></body>'
+    );
+    const ctx = mockCtx({ '/novel-rated': ok(rated) });
+    const info = await ext.parseNovelInfo('/novel-rated', ctx);
+    expect(info.rating).toBe(4.5);
+  });
+
+  it('returns undefined rating when the site reports 0.0 (no votes yet)', async () => {
+    const unrated = NOVEL_PAGE.replace(
+      '</body>',
+      '<div id="kol-series-rating"><span class="custom-rating-value">0.0 / 5</span></div></body>'
+    );
+    const ctx = mockCtx({ '/novel-unrated': ok(unrated) });
+    const info = await ext.parseNovelInfo('/novel-unrated', ctx);
+    expect(info.rating).toBeUndefined();
   });
 
   it('sets source to extension id', async () => {

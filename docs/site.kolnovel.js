@@ -5,7 +5,7 @@ registerExtension({
   id: 'site:kolnovel',
   name: 'كول نوفيل',
   lang: 'ar',
-  version: '1.5.2',
+  version: '1.5.3',
   apiVersion: 1,
   baseUrl: 'https://kolnovel.com',
 
@@ -280,14 +280,37 @@ registerExtension({
       summary = this._decodeEntities(this._stripTags(block)).replace(/[\s{]+$/g, '');
     }
 
-    // Genres from .sertogenre
+    // Genres from .sertogenre — depth-aware extraction. The live page nests a
+    // heading div INSIDE .sertogenre
+    // (<div class="sertogenre"><div class="series-card-heading ...">التصنيفات</div><a...>),
+    // so a naive non-greedy `</div>` match stops at the heading and yields zero
+    // genres (detail page then fell back to the fake 'روايات مترجمة' default).
     var genres = [];
-    var genreSection = html.match(/<div[^>]*class="[^"]*sertogenre[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
-    if (genreSection) {
+    var genreBlock = this._extractBlockContent(html, '<div[^>]*class="[^"]*sertogenre[^"]*"[^>]*>');
+    var genreHtml = genreBlock ? genreBlock.content : null;
+    if (!genreHtml) {
+      var genreSection = html.match(/<div[^>]*class="[^"]*sertogenre[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+      genreHtml = genreSection ? genreSection[1] : null;
+    }
+    if (genreHtml) {
       var genreRegex = /<a[^>]*>([^<]+)<\/a>/gi;
       var gm;
-      while ((gm = genreRegex.exec(genreSection[1])) !== null) {
-        genres.push(this._decodeEntities(gm[1].trim()));
+      while ((gm = genreRegex.exec(genreHtml)) !== null) {
+        var g = this._decodeEntities(gm[1].replace(/^#\s*/, '').trim());
+        if (g && genres.indexOf(g) === -1) genres.push(g);
+      }
+    }
+
+    // Rating from the detail page: #kol-series-rating .custom-rating-value
+    // holds the overall score ("8.5 / 5"). Already on the app's 0..5 scale —
+    // no conversion. Missing/zero → undefined so the app hides it instead of
+    // showing a fabricated default.
+    var rating;
+    var rateMatch = html.match(/<span[^>]*class="[^"]*custom-rating-value[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
+    if (rateMatch) {
+      var rateNum = parseFloat(this._toLatinDigits(this._stripTags(rateMatch[1]).replace(',', '.')));
+      if (!isNaN(rateNum) && rateNum > 0 && rateNum <= 5) {
+        rating = Math.round(rateNum * 10) / 10;
       }
     }
 
@@ -299,8 +322,9 @@ registerExtension({
       coverUrl: coverUrl,
       summary: summary,
       status: status,
-      category: genres.length > 0 ? genres[0] : 'روايات مترجمة',
-      tags: genres
+      category: genres.length > 0 ? genres[0] : undefined,
+      tags: genres.length > 0 ? genres : undefined,
+      rating: rating
     };
   },
 

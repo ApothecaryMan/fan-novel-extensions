@@ -8,7 +8,7 @@ registerExtension({
   id: 'site:novelfull',
   name: 'NovelFull',
   lang: 'en',
-  version: '1.2.2',
+  version: '1.2.4',
   apiVersion: 1,
   baseUrl: 'https://novelfull.com',
 
@@ -133,27 +133,6 @@ registerExtension({
     return out;
   },
 
-  _parseDate: function (raw) {
-    if (!raw) return undefined;
-    var s = String(raw).replace(/\s+/g, ' ').trim().toLowerCase();
-    if (!s) return undefined;
-    var now = Date.now();
-
-    if (/^\d+\s*(sec|secs|second|seconds)/.test(s)) return now;
-    if (/^\d+\s*(min|mins|minute|minutes)(\s+ago)?/.test(s)) return now - parseInt(s.match(/(\d+)/)[1], 10) * 60 * 1000;
-    if (/^\d+\s*(hour|hours|hr|hrs)(\s+ago)?/.test(s)) return now - parseInt(s.match(/(\d+)/)[1], 10) * 3600 * 1000;
-    if (/^\d+\s*(day|days)(\s+ago)?/.test(s)) return now - parseInt(s.match(/(\d+)/)[1], 10) * 24 * 3600 * 1000;
-    if (/^\d+\s*(week|weeks)(\s+ago)?/.test(s)) return now - parseInt(s.match(/(\d+)/)[1], 10) * 7 * 24 * 3600 * 1000;
-    if (/^\d+\s*(month|months)(\s+ago)?/.test(s)) return now - parseInt(s.match(/(\d+)/)[1], 10) * 30 * 24 * 3600 * 1000;
-    if (/^\d+\s*(year|years)(\s+ago)?/.test(s)) return now - parseInt(s.match(/(\d+)/)[1], 10) * 365 * 24 * 3600 * 1000;
-    if (s.indexOf('yesterday') !== -1) return now - 24 * 3600 * 1000;
-    if (s.indexOf('today') !== -1) return now;
-
-    var parsed = Date.parse(s);
-    if (!isNaN(parsed)) return parsed;
-    return undefined;
-  },
-
   // ---------------------------------------------------------------
   // Metadata
   // ---------------------------------------------------------------
@@ -244,7 +223,17 @@ registerExtension({
     var html = await this._fetchCached(base, ctx);
     var pages = this._totalPages(html);
 
-    var chapters = this._parseChapterPage(html);
+    // Open-date fallback: the site publishes no chapter dates, so stamp every
+    // chapter with this crawl's start time. Captured once so all chapters share
+    // one consistent timestamp.
+    var fetchedAt = Date.now();
+
+    // Per-page slots merged in order after all workers finish, so page results
+    // can never overwrite each other. A page that fails twice is skipped instead
+    // of failing the whole 80-page crawl (Cloudflare 403s are common on this
+    // host) — a partial list beats an empty one, and the next refresh converges.
+    var slots = [];
+    slots[0] = this._parseChapterPage(html, fetchedAt);
 
     var self = this;
     var pageTasks = [];
@@ -257,15 +246,31 @@ registerExtension({
     var worker = async function () {
       while (idx < pageTasks.length) {
         var cur = pageTasks[idx++];
-        var pageHtml = await self._fetch(base + '?page=' + cur, ctx);
-        var pageChaps = self._parseChapterPage(pageHtml);
-        if (pageChaps.length) chapters = chapters.concat(pageChaps);
+        var pageHtml = null;
+        try {
+          pageHtml = await self._fetch(base + '?page=' + cur, ctx);
+        } catch (e) {
+          try {
+            pageHtml = await self._fetch(base + '?page=' + cur, ctx);
+          } catch (e2) {
+            pageHtml = null;
+          }
+        }
+        if (pageHtml) {
+          var pageChaps = self._parseChapterPage(pageHtml, fetchedAt);
+          if (pageChaps.length) slots[cur - 1] = pageChaps;
+        }
       }
     };
     for (var w = 0; w < Math.min(concurrency, pageTasks.length); w++) {
       workers.push(worker());
     }
     await Promise.all(workers);
+
+    var chapters = [];
+    for (var s = 0; s < slots.length; s++) {
+      if (slots[s]) chapters = chapters.concat(slots[s]);
+    }
 
     chapters = this._finalizeChapters(chapters);
     return chapters;
@@ -310,28 +315,11 @@ registerExtension({
     return 1;
   },
 
-  _extractChapterDate: function (liBlock) {
-    if (!liBlock) return undefined;
-    // <time datetime="...">2024-01-02 ...</time> — prefer machine-readable attr.
-    var dt = liBlock.match(/<time[^>]+datetime="([^"]+)"/i);
-    if (dt) {
-      var parsedDt = this._parseDate(dt[1]);
-      if (parsedDt !== undefined) return parsedDt;
-    }
-    // Explicit date/time spans some mirrors render next to the chapter link.
-    var span = liBlock.match(/<span[^>]*class="[^"]*(?:chapter-time|chapter-date|time|date|update-time|updated)[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
-    if (span) {
-      var parsedSpan = this._parseDate(this._stripTags(span[1]));
-      if (parsedSpan !== undefined) return parsedSpan;
-    }
-    return undefined;
-  },
-
-  _parseChapterPage: function (html) {
+  _parseChapterPage: function (html, fetchedAt) {
     var chapters = [];
     // Only the full paginated list: <ul class="list-chapter"> ... <li><a href=".."><span class="chapter-text">Chapter N: T</span></a></li>
-    // Parse per-<li> so a date rendered inside the same row (<time>, .chapter-time)
-    // can be attached to its chapter as uploadedAt.
+    // novelfull.com publishes no per-chapter dates, so every chapter is stamped
+    // with the crawl time (fetchedAt) as an open-date fallback.
     var listStart = html.indexOf('id="list-chapter"');
     var region = listStart !== -1 ? html.slice(listStart) : html;
     var liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
@@ -349,10 +337,8 @@ registerExtension({
       var chapterNumber = numParsed ? parseInt(numParsed[1], 10) : 0;
 
       var title = this._stripChapterPrefix(rawTitle);
-      var uploadedAt = this._extractChapterDate(li);
 
-      var item = { url: this._absUrl(href), number: chapterNumber, title: title };
-      if (uploadedAt !== undefined) item.uploadedAt = uploadedAt;
+      var item = { url: this._absUrl(href), number: chapterNumber, title: title, uploadedAt: fetchedAt };
       chapters.push(item);
     }
     if (chapters.length > 0) return chapters;
@@ -369,7 +355,7 @@ registerExtension({
 
       var title2 = this._stripChapterPrefix(rawTitle2);
 
-      fallbackItems.push({ url: this._absUrl(href2), number: chapterNumber2, title: title2 });
+      fallbackItems.push({ url: this._absUrl(href2), number: chapterNumber2, title: title2, uploadedAt: fetchedAt });
     }
     return fallbackItems.length ? fallbackItems : chapters;
   },
@@ -468,20 +454,25 @@ registerExtension({
   },
 
   searchNovels: async function (query, page, ctx) {
+    var pageNum = (page && page > 1) ? Math.floor(page) : 1;
     var isBrowse = !query || !query.trim();
-    var url;
     if (isBrowse) {
-      url = this._absUrl('/most-popular');
-    } else {
-      url = this._absUrl('/search?keyword=' + encodeURIComponent(query.trim()));
+      return this.getPopularNovels(pageNum, ctx);
     }
+    // /search has no ?page=N pagination (page 2 returns 404) — all matches come
+    // on one page, so pages beyond 1 are empty and correctly end the catalogue.
+    if (pageNum > 1) return [];
+    var url = this._absUrl('/search?keyword=' + encodeURIComponent(query.trim()));
     var res = await ctx.xFetch(url);
     if (!res.ok) return [];
     return this._parseNovelRows(res.text);
   },
 
   getPopularNovels: async function (page, ctx) {
-    var res = await ctx.xFetch(this._absUrl('/most-popular'));
+    var pageNum = (page && page > 1) ? Math.floor(page) : 1;
+    var url = this._absUrl('/most-popular');
+    if (pageNum > 1) url += '?page=' + pageNum;
+    var res = await ctx.xFetch(url);
     if (!res.ok) return [];
     return this._parseNovelRows(res.text);
   },

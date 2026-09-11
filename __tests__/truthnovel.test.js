@@ -46,7 +46,7 @@ describe("site:truthnovel extension", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.1.4");
+    expect(ext.version).toBe("1.1.5");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -127,5 +127,52 @@ describe("site:truthnovel extension", () => {
     expect(res.comments[1].images).toEqual(["https://truthnovel.top/wp-content/uploads/pic.jpg", "https://truthnovel.top/wp-content/uploads/2026/09/attach.gif"]);
     expect(res.comments[0].likes).toBe(11);
     expect(res.comments[1].images).toContain("https://truthnovel.top/wp-content/uploads/2026/09/attach.gif");
+  });
+
+  it("posts top-level comment via wpdGetNonce + wpdAddComment protocol", async () => {
+    const seen = [];
+    const ctx = mockCtx({
+      "2430-x/": ok('<script>var wpdiscuzAjaxObj = {"wc_post_id":"10897"};</script>'),
+      "admin-ajax.php": (url, init) => {
+        const body = String(init.body || "");
+        seen.push(body);
+        if (body.includes("action=wpdGetNonce")) {
+          return ok(JSON.stringify({ success: true, data: { wpdiscuz_nonce: "abc123" } }));
+        }
+        return ok(JSON.stringify({ success: true, data: { new_comment_id: 58719, held_moderate: 1 } }));
+      }
+    });
+    const res = await ext.postComment("https://truthnovel.top/2430-x/", { author: "FanTest", email: "a@b.co", body: "hello" }, ctx);
+    expect(res.ok).toBe(true);
+    expect(res.id).toBe("58719");
+    expect(res.needsModeration).toBe(true);
+    const add = seen.find((b) => b.includes("wpdAddComment"));
+    expect(add).toContain("postId=10897");
+    expect(add).toContain("wpdiscuz_unique_id=0_0");
+    expect(add).toContain("wpd_comment_depth=1");
+    expect(add).toContain("wc_name=FanTest");
+    expect(add).toContain("wc_comment=hello");
+    expect(add).toContain("wpdiscuz_nonce=abc123");
+  });
+
+  it("posts reply with parent threading + rejects short names", async () => {
+    const seen = [];
+    const ctx = mockCtx({
+      "2430-x/": ok('<div id=\'wpd-comm-58659_0\' class=\'comment depth-1 wpd-comment wpd_comment_level-1\'>x</div><script>var w = {"wc_post_id":"10897"};</script>'),
+      "admin-ajax.php": (url, init) => {
+        const body = String(init.body || "");
+        seen.push(body);
+        if (body.includes("action=wpdGetNonce")) {
+          return ok(JSON.stringify({ success: true, data: { wpdiscuz_nonce: "n1" } }));
+        }
+        return ok(JSON.stringify({ success: true, data: { new_comment_id: 58720, held_moderate: 1 } }));
+      }
+    });
+    const res = await ext.postComment("https://truthnovel.top/2430-x/", { parentId: "58659", author: "FanTest", email: "a@b.co", body: "reply" }, ctx);
+    expect(res.id).toBe("58720");
+    const add = seen.find((b) => b.includes("wpdAddComment"));
+    expect(add).toContain("wpdiscuz_unique_id=58659_0");
+    expect(add).toContain("wpd_comment_depth=2");
+    await expect(ext.postComment("https://truthnovel.top/2430-x/", { author: "AB", email: "a@b.co", body: "x" }, ctx)).rejects.toThrow();
   });
 });

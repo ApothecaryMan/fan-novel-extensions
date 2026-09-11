@@ -35,11 +35,17 @@ export function loadExtension(filename) {
 export function mockCtx(routes = {}) {
   return {
     log: () => {},
-    xFetch: async (urlOrOpts) => {
+    xFetch: async (urlOrOpts, idInit) => {
       const url = typeof urlOrOpts === 'string' ? urlOrOpts : urlOrOpts.url;
+      const init =
+        idInit && typeof idInit === 'object'
+          ? idInit
+          : urlOrOpts && typeof urlOrOpts === 'object'
+            ? urlOrOpts
+            : {};
       for (const [pattern, res] of Object.entries(routes)) {
         if (url.includes(pattern)) {
-          return typeof res === 'function' ? res(url) : res;
+          return typeof res === 'function' ? res(url, init) : res;
         }
       }
       return { ok: false, status: 404, text: '' };

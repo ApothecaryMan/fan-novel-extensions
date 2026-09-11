@@ -25,7 +25,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.1.4",
+  version: "1.1.5",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -462,6 +462,14 @@ registerExtension({
 
   // ---------------------------------------------------------------
   // Guest post to wpDiscuz (host enforces app login; author = username).
+  // Verified protocol (Sep 2026, wpDiscuz 7.6.62):
+  // 1. GET chapter HTML -> "wc_post_id":"10897"
+  // 2. POST admin-ajax.php action=wpdGetNonce -> data.wpdiscuz_nonce
+  // 3. POST admin-ajax.php action=wpdAddComment with postId,
+  //    wpdiscuz_unique_id (0_0 top-level, {parentId}_0 reply),
+  //    wpd_comment_depth, wc_comment/wc_name/wc_email + nonce.
+  // Replies return is_main:0 + level-2; first-time guests get
+  // held_moderate:1 (invisible in feed until approved).
   // ---------------------------------------------------------------
   postComment: async function (chapterUrl, input, ctx) {
     var fullUrl = this._absUrl(chapterUrl);
@@ -471,19 +479,45 @@ registerExtension({
     var postIdM = html.match(/"wc_post_id"\s*:\s*"(\d+)"/) || html.match(/wc_post_id["']?\s*[:=]\s*["']?(\d+)/);
     if (!postIdM) throw new Error("تعذر تحديد معرف المقال");
     var postId = postIdM[1];
-    var nonceM = html.match(/wpdiscuz_nonce["']?\s*[:=]\s*["']([a-zA-Z0-9]+)["']/);
     var author = (input && input.author || "").trim().slice(0, 50);
     var email = (input && input.email || "").trim().slice(0, 100);
     var body = (input && input.body || "").trim();
     if (!author || !body) throw new Error("الاسم والنص مطلوبان");
+    if (author.length < 3) throw new Error("الاسم قصير (3 أحرف على الأقل)");
     var parentRaw = input && input.parentId ? String(input.parentId).replace(/\D/g, "") : "";
-    var params = "action=wpdAddComment&post_id=" + encodeURIComponent(postId)
-      + "&parent=" + encodeURIComponent(parentRaw || "0")
-      + "&author=" + encodeURIComponent(author)
-      + "&email=" + encodeURIComponent(email)
-      + "&content=" + encodeURIComponent(body);
-    if (nonceM) params += "&nonce=" + encodeURIComponent(nonceM[1]);
     var ajaxUrl = this._absUrl("/wp-admin/admin-ajax.php");
+    // 1) Fresh nonce (wpDiscuz does not embed it in the form HTML)
+    var nonceRes = await ctx.xFetch(ajaxUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+      body: "action=wpdGetNonce"
+    });
+    if (!nonceRes.ok) throw new Error("فشل تجهيز التعليق: " + nonceRes.status);
+    var nonceData;
+    try { nonceData = JSON.parse(nonceRes.text); } catch (e) { throw new Error("رد غير متوقع من الموقع"); }
+    var nonce = nonceData && nonceData.data && nonceData.data.wpdiscuz_nonce;
+    if (!nonce) throw new Error("تعذر تجهيز التعليق (nonce)");
+    // 2) Threading: top-level 0_0/depth 1; reply {parent}_0/depth parent+1
+    var uniqueId = "0_0";
+    var depth = "1";
+    if (parentRaw) {
+      uniqueId = parentRaw + "_0";
+      depth = "2";
+      try {
+        var lvlM = html.match(new RegExp("wpd-comm-" + parentRaw + "[^']*'[^>]*wpd_comment_level-(\\d)"));
+        if (lvlM) {
+          var pd = parseInt(lvlM[1], 10);
+          if (!isNaN(pd) && pd >= 1 && pd < 5) depth = String(pd + 1);
+        }
+      } catch (e2) { /* keep depth 2 */ }
+    }
+    var params = "action=wpdAddComment&postId=" + encodeURIComponent(postId)
+      + "&wpdiscuz_unique_id=" + encodeURIComponent(uniqueId)
+      + "&wpdiscuz_nonce=" + encodeURIComponent(nonce)
+      + "&wc_comment=" + encodeURIComponent(body)
+      + "&wc_name=" + encodeURIComponent(author)
+      + "&wc_email=" + encodeURIComponent(email)
+      + "&wc_website=&wpd_comment_depth=" + encodeURIComponent(depth);
     var res = await ctx.xFetch(ajaxUrl, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
@@ -494,10 +528,13 @@ registerExtension({
     try { data = JSON.parse(res.text); } catch (e) { throw new Error("رد غير متوقع من الموقع"); }
     var payload = data && data.data ? data.data : data;
     if (data && data.success === false) {
-      throw new Error((payload && payload.message) || "رفض الموقع التعليق");
+      throw new Error((payload && (payload.message || payload)) || "رفض الموقع التعليق");
     }
-    var newId = payload && (payload.comment_id || payload.commentId) ? String(payload.comment_id || payload.commentId) : undefined;
-    var held = payload && (payload.held_for_moderation || payload.moderation) ? true : false;
+    var newId = payload && (payload.new_comment_id || payload.comment_id || payload.commentId)
+      ? String(payload.new_comment_id || payload.comment_id || payload.commentId)
+      : undefined;
+    var held = payload && (payload.held_moderate === 1 || payload.held_moderate === "1"
+      || payload.held_for_moderation || payload.moderation) ? true : false;
     return { ok: true, id: newId, needsModeration: held };
   },
 

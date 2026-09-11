@@ -46,7 +46,7 @@ describe("site:truthnovel extension", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.1.5");
+    expect(ext.version).toBe("1.1.6");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -174,5 +174,28 @@ describe("site:truthnovel extension", () => {
     expect(add).toContain("wpdiscuz_unique_id=58659_0");
     expect(add).toContain("wpd_comment_depth=2");
     await expect(ext.postComment("https://truthnovel.top/2430-x/", { author: "AB", email: "a@b.co", body: "x" }, ctx)).rejects.toThrow();
+  });
+
+  it("votes via wpdVoteOnComment and returns server counts", async () => {
+    const seen = [];
+    const ctx = mockCtx({
+      "admin-ajax.php": (url, init) => {
+        const body = String(init.body || "");
+        seen.push(body);
+        if (body.includes("action=wpdGetNonce")) {
+          return ok(JSON.stringify({ success: true, data: { wpdiscuz_nonce: "v1" } }));
+        }
+        return ok(JSON.stringify({ success: true, data: { likeCount: "15", curUserReaction: 1 } }));
+      }
+    });
+    const res = await ext.voteComment("https://truthnovel.top/2430-x/", { commentId: "58659", vote: 1 }, ctx);
+    expect(res.ok).toBe(true);
+    expect(res.likes).toBe(15);
+    expect(res.liked).toBe(true);
+    const vote = seen.find((b) => b.includes("wpdVoteOnComment"));
+    expect(vote).toContain("commentId=58659");
+    expect(vote).toContain("voteType=1");
+    expect(vote).toContain("wpdiscuz_nonce=v1");
+    await expect(ext.voteComment("https://truthnovel.top/2430-x/", { commentId: "", vote: 1 }, ctx)).rejects.toThrow();
   });
 });

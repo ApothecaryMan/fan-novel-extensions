@@ -25,7 +25,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.1.5",
+  version: "1.1.6",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -536,6 +536,47 @@ registerExtension({
     var held = payload && (payload.held_moderate === 1 || payload.held_moderate === "1"
       || payload.held_for_moderation || payload.moderation) ? true : false;
     return { ok: true, id: newId, needsModeration: held };
+  },
+
+  // ---------------------------------------------------------------
+  // Guest vote (verified Sep 2026: wpDiscuz accepts guest votes,
+  // tracked by IP/cookie — no login needed). Sending the same voteType
+  // again toggles it off (curUserReaction 0). Returns server counts.
+  // ---------------------------------------------------------------
+  voteComment: async function (chapterUrl, input, ctx) {
+    var rawId = input && input.commentId ? String(input.commentId).replace(/\D/g, "") : "";
+    if (!rawId) throw new Error("تعذر تحديد التعليق");
+    var vote = input && input.vote === -1 ? "-1" : "1";
+    var ajaxUrl = this._absUrl("/wp-admin/admin-ajax.php");
+    var nonceRes = await ctx.xFetch(ajaxUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+      body: "action=wpdGetNonce"
+    });
+    if (!nonceRes.ok) throw new Error("فشل تجهيز التصويت: " + nonceRes.status);
+    var nonceData;
+    try { nonceData = JSON.parse(nonceRes.text); } catch (e) { throw new Error("رد غير متوقع من الموقع"); }
+    var nonce = nonceData && nonceData.data && nonceData.data.wpdiscuz_nonce;
+    if (!nonce) throw new Error("تعذر تجهيز التصويت (nonce)");
+    var params = "action=wpdVoteOnComment&commentId=" + encodeURIComponent(rawId)
+      + "&voteType=" + encodeURIComponent(vote)
+      + "&wpdiscuz_nonce=" + encodeURIComponent(nonce);
+    var res = await ctx.xFetch(ajaxUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+      body: params
+    });
+    if (!res.ok) throw new Error("فشل التصويت: " + res.status);
+    var data;
+    try { data = JSON.parse(res.text); } catch (e) { throw new Error("رد غير متوقع من الموقع"); }
+    if (data && data.success === false) {
+      var msg = data.data && (data.data.message || data.data);
+      throw new Error(msg || "رفض الموقع التصويت");
+    }
+    var d = data && data.data ? data.data : {};
+    var likes = parseInt(d.likeCount, 10);
+    if (isNaN(likes) || likes < 0) likes = 0;
+    return { ok: true, likes: likes, liked: d.curUserReaction === 1 || d.curUserReaction === "1" };
   },
 
   getCategories: async function () {

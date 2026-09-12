@@ -46,7 +46,7 @@ describe("site:truthnovel extension", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.1.6");
+    expect(ext.version).toBe("1.1.7");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -197,5 +197,50 @@ describe("site:truthnovel extension", () => {
     expect(vote).toContain("voteType=1");
     expect(vote).toContain("wpdiscuz_nonce=v1");
     await expect(ext.voteComment("https://truthnovel.top/2430-x/", { commentId: "", vote: 1 }, ctx)).rejects.toThrow();
+  });
+
+  it("fetches author comments across chapters via WP REST API", async () => {
+    const mockComments = [
+      {
+        id: 58826,
+        post: 10907,
+        author_name: "اورابوراس",
+        date: "2026-09-12T19:02:45",
+        content: { rendered: "<p>تعليق تجريبي رائع &#8230;</p>\n" },
+        _embedded: {
+          up: [
+            {
+              id: 10907,
+              title: { rendered: "2432 -قرار روبين" },
+              link: "https://truthnovel.top/2432-decision/"
+            }
+          ]
+        }
+      }
+    ];
+
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/comments": (url) => {
+        return {
+          status: 200,
+          ok: true,
+          headers: {
+            "x-wp-total": "108",
+            "x-wp-totalpages": "4"
+          },
+          text: JSON.stringify(mockComments)
+        };
+      }
+    });
+
+    const res = await ext.getAuthorComments("اورابوراس", 1, ctx);
+    expect(res.authorName).toBe("اورابوراس");
+    expect(res.totalComments).toBe(108);
+    expect(res.hasMore).toBe(true);
+    expect(res.comments.length).toBe(1);
+    expect(res.comments[0].id).toBe("58826");
+    expect(res.comments[0].chapterTitle).toBe("2432 -قرار روبين");
+    expect(res.comments[0].chapterUrl).toBe("https://truthnovel.top/2432-decision/");
+    expect(res.comments[0].body).toBe("تعليق تجريبي رائع …");
   });
 });

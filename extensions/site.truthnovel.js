@@ -25,7 +25,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.1.6",
+  version: "1.1.7",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -585,5 +585,137 @@ registerExtension({
 
   getCategoryNovels: async function (categorySlug, page, ctx) {
     return this.searchNovels("", page, ctx);
+  },
+
+  // ---------------------------------------------------------------
+  // Author comments across all chapters (WP REST API)
+  // ---------------------------------------------------------------
+  getAuthorComments: async function (authorName, page, ctx) {
+    var name = (authorName || "").trim();
+    if (!name) return { authorName: "", totalComments: 0, totalLikes: 0, comments: [], hasMore: false };
+    var pageNum = typeof page === "number" && page >= 1 ? page : 1;
+    var perPage = 30;
+    var apiUrl = this._absUrl("/wp-json/wp/v2/comments?search=" + encodeURIComponent(name) + "&per_page=" + perPage + "&page=" + pageNum + "&_embed=up");
+    var res = await ctx.xFetch(apiUrl);
+    if (!res.ok) {
+      if (res.status === 400 || res.status === 404) {
+        return { authorName: name, totalComments: 0, totalLikes: 0, comments: [], hasMore: false };
+      }
+      throw new Error("فشل جلب تعليقات المعلق: " + res.status);
+    }
+    var totalHeader = (res.headers && (res.headers["x-wp-total"] || res.headers["X-WP-Total"])) || "0";
+    var totalPagesHeader = (res.headers && (res.headers["x-wp-totalpages"] || res.headers["X-WP-TotalPages"])) || "1";
+    var total = parseInt(totalHeader, 10);
+    if (isNaN(total) || total < 0) total = 0;
+    var totalPages = parseInt(totalPagesHeader, 10);
+    if (isNaN(totalPages) || totalPages < 1) totalPages = 1;
+
+    var rawList = [];
+    try {
+      rawList = JSON.parse(res.text) || [];
+    } catch (e) {
+      throw new Error("رد غير متوقع من الموقع");
+    }
+    if (!Array.isArray(rawList)) rawList = [];
+
+    var normalizedTarget = name.toLowerCase();
+    var filtered = rawList.filter(function (item) {
+      var an = (item && item.author_name ? String(item.author_name) : "").trim().toLowerCase();
+      return an === normalizedTarget;
+    });
+
+    var cleanText = function (html) {
+      if (!html) return "";
+      var stripped = html.replace(/<[^>]+>/g, " ");
+      return stripped
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&#039;/g, "'")
+        .replace(/&#8230;/g, "…")
+        .replace(/&#8217;/g, "'")
+        .replace(/&#8216;/g, "'")
+        .replace(/&#8220;/g, '"')
+        .replace(/&#8221;/g, '"')
+        .replace(/\s+/g, " ")
+        .trim();
+    };
+
+    var postMap = {};
+    var missingPostIds = [];
+    for (var i = 0; i < filtered.length; i++) {
+      var item = filtered[i];
+      var embeddedUp = item._embedded && item._embedded.up && item._embedded.up[0];
+      if (embeddedUp && embeddedUp.title) {
+        var t = typeof embeddedUp.title === "object" ? embeddedUp.title.rendered : embeddedUp.title;
+        postMap[item.post] = {
+          title: cleanText(t),
+          link: embeddedUp.link || ""
+        };
+      } else if (item.post && !postMap[item.post] && missingPostIds.indexOf(item.post) === -1) {
+        missingPostIds.push(item.post);
+      }
+    }
+
+    for (var m = 0; m < Math.min(missingPostIds.length, 10); m++) {
+      var pid = missingPostIds[m];
+      try {
+        var pRes = await ctx.xFetch(this._absUrl("/wp-json/wp/v2/posts/" + pid + "?_fields=id,title,link"));
+        if (pRes.ok) {
+          var pJson = JSON.parse(pRes.text);
+          if (pJson) {
+            var pt = pJson.title && (pJson.title.rendered || pJson.title);
+            postMap[pid] = {
+              title: cleanText(pt),
+              link: pJson.link || ""
+            };
+          }
+        }
+      } catch (pe) { /* non-fatal fallback */ }
+    }
+
+    var comments = [];
+    var totalLikes = 0;
+    for (var j = 0; j < filtered.length; j++) {
+      var c = filtered[j];
+      var postInfo = postMap[c.post] || {};
+      var dateMs = Date.parse(c.date_gmt ? c.date_gmt + "Z" : c.date) || Date.now();
+      var body = cleanText(c.content && c.content.rendered ? c.content.rendered : "");
+      
+      var images = [];
+      if (c.content && c.content.rendered) {
+        var imgMatches = c.content.rendered.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/g);
+        if (imgMatches) {
+          for (var im = 0; im < imgMatches.length; im++) {
+            var srcM = imgMatches[im].match(/src=["'](https?:\/\/[^"']+)["']/);
+            if (srcM && srcM[1] && !/wpdiscuz|smiles|emoji/i.test(srcM[1])) {
+              images.push(srcM[1]);
+            }
+          }
+        }
+      }
+
+      var likes = 0;
+      totalLikes += likes;
+
+      comments.push({
+        id: String(c.id),
+        body: body,
+        createdAt: dateMs,
+        likes: likes,
+        chapterTitle: postInfo.title || ("الفصل " + (c.post || "")),
+        chapterUrl: postInfo.link || "",
+        images: images.length > 0 ? images.slice(0, 4) : undefined
+      });
+    }
+
+    return {
+      authorName: name,
+      totalComments: total > 0 ? total : comments.length,
+      totalLikes: totalLikes,
+      comments: comments,
+      hasMore: pageNum < totalPages
+    };
   }
 });

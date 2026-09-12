@@ -8,7 +8,7 @@ registerExtension({
   id: 'site:novelfull',
   name: 'NovelFull',
   lang: 'en',
-  version: '1.2.5',
+  version: '1.2.6',
   apiVersion: 1,
   baseUrl: 'https://novelfull.com',
 
@@ -269,6 +269,29 @@ registerExtension({
 
     chapters = this._finalizeChapters(chapters);
     return chapters;
+  },
+
+  // ---------------------------------------------------------------
+  // Incremental refresh — the newest chapters live on the LAST list page.
+  // Returns that page unfiltered (the host diffs by URL); empty only when
+  // the last page is unreachable, in which case the host falls back to a
+  // full parseChapterList.
+  // ---------------------------------------------------------------
+  fetchLatestChapters: async function (novelUrl, knownCount, ctx) {
+    var fullUrl = this._absUrl(novelUrl);
+    var base = fullUrl.split('?')[0].replace(/\/$/, '');
+    var html = await this._fetchCached(base, ctx);
+    var pages = this._totalPages(html);
+    if (pages <= 1) return this._finalizeChapters(this._parseChapterPage(html));
+    var lastHtml;
+    try {
+      lastHtml = await this._fetch(base + '?page=' + pages, ctx);
+    } catch (e) {
+      return [];
+    }
+    var chaps = this._parseChapterPage(lastHtml);
+    if (!chaps.length) return [];
+    return this._finalizeChapters(chaps);
   },
 
   _fetch: async function (url, ctx) {

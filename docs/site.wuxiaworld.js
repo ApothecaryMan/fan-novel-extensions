@@ -14,7 +14,7 @@ registerExtension({
   id: 'site:wuxiaworld',
   name: 'WuxiaWorld',
   lang: 'en',
-  version: '1.0.1',
+  version: '1.0.2',
   apiVersion: 1,
   baseUrl: 'https://lite.wuxiaworld.com',
 
@@ -223,6 +223,29 @@ registerExtension({
 
     chapters = this._finalizeChapters(chapters);
     return chapters;
+  },
+
+  // ---------------------------------------------------------------
+  // Incremental refresh — the newest chapters live on the LAST TOC page.
+  // Returns that page unfiltered (the host diffs by URL); empty only when
+  // the last page is unreachable, in which case the host falls back to a
+  // full parseChapterList.
+  // ---------------------------------------------------------------
+  fetchLatestChapters: async function (novelUrl, knownCount, ctx) {
+    var fullUrl = this._absUrl(novelUrl).split('?')[0].replace(/\/$/, '');
+    var html = await this._fetchCached(fullUrl, ctx);
+    if (/<h1>\s*Not found\s*<\/h1>/i.test(html)) throw new Error('Novel not found');
+    var pages = this._totalTocPages(html);
+    if (pages <= 1) return this._finalizeChapters(this._parseTocPage(html));
+    var lastHtml;
+    try {
+      lastHtml = await this._fetch(fullUrl + '?toc=' + pages, ctx);
+    } catch (e) {
+      return [];
+    }
+    var chaps = this._parseTocPage(lastHtml);
+    if (!chaps.length) return [];
+    return this._finalizeChapters(chaps);
   },
 
   _fetch: async function (url, ctx) {

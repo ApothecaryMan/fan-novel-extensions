@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1789198295931,
+  "generatedAt": 1789201285938,
   "extensions": [
     {
       "id": "site:cenele",
@@ -42,10 +42,10 @@
       "id": "site:novelfull",
       "name": "NovelFull",
       "lang": "en",
-      "version": "1.2.5",
+      "version": "1.2.6",
       "apiVersion": 1,
-      "size": 21251,
-      "sha256": "94ba2051b6b9ea46418f68edba436ae7bacb3b6f4cdc6c2383caf376a4e07613",
+      "size": 22249,
+      "sha256": "229dc1a5f44bb270b00992332e99b4cbcc42755d2a20550473e652d289a5381e",
       "url": "site.novelfull.js",
       "baseUrl": "https://novelfull.com",
       "icon": "icons/novelfull.png"
@@ -65,14 +65,14 @@
       "id": "site:wuxiaworld",
       "name": "WuxiaWorld",
       "lang": "en",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "apiVersion": 1,
-      "size": 17023,
-      "sha256": "273f9a792c6323e7fbf7540cce9c43ea56a3689afdd3be2cd11f78a1123d78b2",
+      "size": 18081,
+      "sha256": "d9103d5c588d8284b11651f41c1fdc747ab044cb5786ec981a39aa2b223b43c5",
       "url": "site.wuxiaworld.js",
       "baseUrl": "https://lite.wuxiaworld.com",
       "icon": "icons/wuxiaworld.png"
     }
   ],
-  "signature": "9GpyLAURruV13TujVgN1P-to_WjAZVtwD8BDMJRInWczH1lXQgVNLnVKqX7Trnb-2NFC494R5P8ParpF2VcDCg"
+  "signature": "npKtxN1_v1zqQnClhyKDr8MEiH5EcOcX1NjicOBbAQC6u94tKmpW82XUP9vQmWl1EUuaH8mWNLr67tieBVrXBw"
 }

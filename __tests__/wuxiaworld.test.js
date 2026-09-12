@@ -25,6 +25,14 @@ const TOC_PAGE_2 = `
 <div class="pager cf"><a class="btn" href="/novel/martial-god-asura">&larr; Previous</a><span class="small muted"> Page 2 of 68</span></div>
 `;
 
+const TOC_LAST_PAGE = `
+<ul class="toc">
+<li><a href="/novel/martial-god-asura/mga-chapter-6701">Chapter 6701 – Storm</a></li>
+<li><a href="/novel/martial-god-asura/mga-chapter-6702">Chapter 6702: Finale</a></li>
+</ul>
+<div class="pager cf"><a class="btn" href="/novel/martial-god-asura?toc=67">&larr; Previous</a><span class="small muted"> Page 68 of 68</span></div>
+`;
+
 const CHAPTER_HTML = `
 <p class="small chapter-breadcrumb"><a href="/novel/martial-god-asura">Martial God Asura</a></p>
 <h1 id="chapter-title">Chapter 1 – Outer Court Disciple</h1>
@@ -65,7 +73,7 @@ describe("site:wuxiaworld extension", () => {
     expect(ext.id).toBe("site:wuxiaworld");
     expect(ext.name).toBe("WuxiaWorld");
     expect(ext.lang).toBe("en");
-    expect(ext.version).toBe("1.0.1");
+    expect(ext.version).toBe("1.0.2");
     expect(ext.apiVersion).toBe(1);
     expect(ext.baseUrl).toBe("https://lite.wuxiaworld.com");
   });
@@ -151,6 +159,38 @@ describe("site:wuxiaworld extension", () => {
     expect(r1.length).toBe(2);
     const r2 = await ext.searchNovels("hegemon", 2, ctx);
     expect(r2).toEqual([]);
+  });
+
+  it("fetchLatestChapters returns only the last TOC page (unfiltered, host diffs)", async () => {
+    const seen = [];
+    const ctx = {
+      log: () => {},
+      xFetch: async (url) => {
+        seen.push(url);
+        if (url.includes("?toc=68")) return ok(TOC_LAST_PAGE);
+        if (url.includes("martial-god-asura")) return ok(NOVEL_HTML);
+        return { ok: false, status: 404, text: "" };
+      },
+    };
+    const latest = await ext.fetchLatestChapters(
+      "https://lite.wuxiaworld.com/novel/martial-god-asura", 6700, ctx
+    );
+    // Novel page (learn total) + last TOC page only — never the 66 middle pages.
+    expect(seen.filter((u) => u.includes("?toc="))).toEqual([
+      "https://lite.wuxiaworld.com/novel/martial-god-asura?toc=68",
+    ]);
+    expect(latest.map((c) => c.number)).toEqual([6701, 6702]);
+  });
+
+  it("fetchLatestChapters falls back to [] when the last page fails", async () => {
+    const ctx = mockCtx({
+      "?toc=68": { ok: false, status: 500, text: "" },
+      "martial-god-asura": ok(NOVEL_HTML),
+    });
+    const latest = await ext.fetchLatestChapters(
+      "https://lite.wuxiaworld.com/novel/martial-god-asura", 6700, ctx
+    );
+    expect(latest).toEqual([]);
   });
 
   it("exposes sort categories", async () => {

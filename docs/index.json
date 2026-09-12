@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1789147540433,
+  "generatedAt": 1789198295931,
   "extensions": [
     {
       "id": "site:cenele",
@@ -30,10 +30,10 @@
       "id": "site:kolnovel",
       "name": "كول نوفيل",
       "lang": "ar",
-      "version": "1.5.3",
+      "version": "1.5.4",
       "apiVersion": 1,
-      "size": 35885,
-      "sha256": "4cb381025a34219a5b7558d74a780b8ed83f20ec0df8c958d462d1eda9e68c13",
+      "size": 36367,
+      "sha256": "ffef9b4079c340ea626288732225938584df60b4fd719e807f787b467a411db7",
       "url": "site.kolnovel.js",
       "baseUrl": "https://kolnovel.com",
       "icon": "icons/kolnovel.png"
@@ -42,10 +42,10 @@
       "id": "site:novelfull",
       "name": "NovelFull",
       "lang": "en",
-      "version": "1.2.4",
+      "version": "1.2.5",
       "apiVersion": 1,
       "size": 21251,
-      "sha256": "5404d2fe2b4dfa031ecbf3436ddc4473f0126463e166a267a63d275ddd741992",
+      "sha256": "94ba2051b6b9ea46418f68edba436ae7bacb3b6f4cdc6c2383caf376a4e07613",
       "url": "site.novelfull.js",
       "baseUrl": "https://novelfull.com",
       "icon": "icons/novelfull.png"
@@ -65,14 +65,14 @@
       "id": "site:wuxiaworld",
       "name": "WuxiaWorld",
       "lang": "en",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "apiVersion": 1,
       "size": 17023,
-      "sha256": "44d14f7ef112ff37e887e1ac9d90daaadb190dd9ab2eb5dbde3bda5053e3731d",
+      "sha256": "273f9a792c6323e7fbf7540cce9c43ea56a3689afdd3be2cd11f78a1123d78b2",
       "url": "site.wuxiaworld.js",
       "baseUrl": "https://lite.wuxiaworld.com",
       "icon": "icons/wuxiaworld.png"
     }
   ],
-  "signature": "KRBeFjXcHMJppcfES4oy1IUVUelC7VB96RwLm9DxlwCgmwXO9Z0iFR_tRQ8mDDj4qxnNBAwU_CMtpIw8SaRwCQ"
+  "signature": "9GpyLAURruV13TujVgN1P-to_WjAZVtwD8BDMJRInWczH1lXQgVNLnVKqX7Trnb-2NFC494R5P8ParpF2VcDCg"
 }

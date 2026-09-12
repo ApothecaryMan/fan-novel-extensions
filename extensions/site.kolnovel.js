@@ -5,7 +5,7 @@ registerExtension({
   id: 'site:kolnovel',
   name: 'كول نوفيل',
   lang: 'ar',
-  version: '1.5.3',
+  version: '1.5.4',
   apiVersion: 1,
   baseUrl: 'https://kolnovel.com',
 
@@ -14,8 +14,20 @@ registerExtension({
   // ---------------------------------------------------------------
   _absUrl: function (url) {
     if (url.indexOf('http') === 0) return url;
+    if (url.indexOf('//') === 0) return 'https:' + url;
     var base = this.baseUrl.replace(/\/$/, '');
     return base + (url.charAt(0) === '/' ? '' : '/') + url;
+  },
+
+  // Normalize a cover URL from card/detail HTML (protocol-relative → https).
+  // GIF→static conversion happens app-side (NovelCover), so covers stay
+  // untouched apart from scheme normalization.
+  _cover: function (raw) {
+    if (!raw) return undefined;
+    var u = String(raw).trim();
+    if (!u) return undefined;
+    if (u.indexOf('//') === 0) return 'https:' + u;
+    return u;
   },
 
   _stripTags: function (html) {
@@ -244,7 +256,7 @@ registerExtension({
     var coverMatch = html.match(/<div[^>]*class="[^"]*sertothumb[^"]*"[^>]*>[\s\S]*?<img[^>]+src="([^">]+)"/i) ||
                      html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i) ||
                      html.match(/<img[^>]+class="[^"]*wp-post-image[^"]*"[^>]+src="([^">]+)"/i);
-    var coverUrl = coverMatch ? coverMatch[1].trim() : undefined;
+    var coverUrl = coverMatch ? this._cover(coverMatch[1]) : undefined;
 
     // Author is inside .serl with الكاتب label
     var authorMatch = html.match(/الكاتب[\s\S]*?<a[^>]*>([^<]+)<\/a>/i);
@@ -606,7 +618,7 @@ registerExtension({
             source: this.id,
             url: utaoUrl,
             title: this._decodeEntities(this._stripTags(utaoTitle[1]).trim()),
-            coverUrl: utaoCover ? utaoCover[1].trim() : undefined,
+            coverUrl: utaoCover ? this._cover(utaoCover[1]) : undefined,
             author: 'غير معروف',
             category: 'روايات مترجمة',
             status: 'مستمرة'
@@ -650,7 +662,7 @@ registerExtension({
         source: this.id,
         url: hotUrl,
         title: hotTitle ? this._decodeEntities(this._stripTags(hotTitle[1]).trim()) : '',
-        coverUrl: hotCover ? hotCover[1].trim() : undefined,
+        coverUrl: hotCover ? this._cover(hotCover[1]) : undefined,
         author: 'غير معروف',
         category: hotCat,
         tags: hotTags,
@@ -679,7 +691,7 @@ registerExtension({
         source: this.id,
         url: bsxUrl,
         title: bsxTitle ? this._decodeEntities(this._stripTags(bsxTitle[1]).trim()) : '',
-        coverUrl: bsxCover ? bsxCover[1].trim() : undefined,
+        coverUrl: bsxCover ? this._cover(bsxCover[1]) : undefined,
         author: 'غير معروف',
         category: 'روايات مترجمة',
         status: 'مستمرة',
@@ -766,7 +778,7 @@ registerExtension({
         source: this.id,
         url: mdUrl,
         title: mdTitle ? this._decodeEntities(mdTitle[1].trim()) : '',
-        coverUrl: mdCover ? mdCover[1].trim() : undefined,
+        coverUrl: mdCover ? this._cover(mdCover[1]) : undefined,
         author: 'غير معروف',
         category: mdCategory,
         tags: mdTags,

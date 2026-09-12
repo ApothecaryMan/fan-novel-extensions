@@ -14,7 +14,7 @@ registerExtension({
   id: 'site:wuxiaworld',
   name: 'WuxiaWorld',
   lang: 'en',
-  version: '1.0.0',
+  version: '1.0.1',
   apiVersion: 1,
   baseUrl: 'https://lite.wuxiaworld.com',
 

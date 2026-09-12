@@ -8,7 +8,7 @@ registerExtension({
   id: 'site:novelfull',
   name: 'NovelFull',
   lang: 'en',
-  version: '1.2.4',
+  version: '1.2.5',
   apiVersion: 1,
   baseUrl: 'https://novelfull.com',
 

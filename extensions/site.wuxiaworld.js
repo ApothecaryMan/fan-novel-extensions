@@ -7,13 +7,14 @@
 //   chapter URL : /novel/<slug>/<chapter-slug>
 //   browse      : /novels (sort + cursor pager ?after=N)
 //   search      : /novels?q=<keyword>
-// The site publishes no per-chapter dates, so chapters are stamped with the
-// crawl time as an open-date fallback (same policy as site:novelfull).
+// The site publishes no per-chapter dates, so chapters carry no uploadedAt —
+// a missing date must never read as "released today" (Today timeline only
+// lists chapters with a real release date).
 registerExtension({
   id: 'site:wuxiaworld',
   name: 'WuxiaWorld',
   lang: 'en',
-  version: '1.0.0',
+  version: '1.0.1',
   apiVersion: 1,
   baseUrl: 'https://lite.wuxiaworld.com',
 
@@ -180,11 +181,8 @@ registerExtension({
     if (/<h1>\s*Not found\s*<\/h1>/i.test(html)) throw new Error('Novel not found');
     var pages = this._totalTocPages(html);
 
-    // Open-date fallback: no per-chapter dates on site; stamp crawl time once.
-    var fetchedAt = Date.now();
-
     var slots = [];
-    slots[0] = this._parseTocPage(html, fetchedAt);
+    slots[0] = this._parseTocPage(html);
 
     var self = this;
     var pageTasks = [];
@@ -208,7 +206,7 @@ registerExtension({
           }
         }
         if (pageHtml) {
-          var pageChaps = self._parseTocPage(pageHtml, fetchedAt);
+          var pageChaps = self._parseTocPage(pageHtml);
           if (pageChaps.length) slots[cur - 1] = pageChaps;
         }
       }
@@ -266,7 +264,7 @@ registerExtension({
     return max;
   },
 
-  _parseTocPage: function (html, fetchedAt) {
+  _parseTocPage: function (html) {
     var chapters = [];
     var tocStart = html.indexOf('class="toc"');
     var region = tocStart !== -1 ? html.slice(tocStart) : html;
@@ -292,8 +290,7 @@ registerExtension({
       chapters.push({
         url: this._absUrl(href),
         number: chapterNumber,
-        title: title,
-        uploadedAt: fetchedAt
+        title: title
       });
     }
     return chapters;

@@ -65,7 +65,7 @@ describe("site:wuxiaworld extension", () => {
     expect(ext.id).toBe("site:wuxiaworld");
     expect(ext.name).toBe("WuxiaWorld");
     expect(ext.lang).toBe("en");
-    expect(ext.version).toBe("1.0.0");
+    expect(ext.version).toBe("1.0.1");
     expect(ext.apiVersion).toBe(1);
     expect(ext.baseUrl).toBe("https://lite.wuxiaworld.com");
   });
@@ -95,12 +95,11 @@ describe("site:wuxiaworld extension", () => {
     await expect(ext.parseNovelInfo("https://lite.wuxiaworld.com/novel/nope", ctx)).rejects.toThrow();
   });
 
-  it("parses TOC pages, skips group headers, stamps crawl time", async () => {
+  it("parses TOC pages, skips group headers, leaves unknown dates unset", async () => {
     const ctx = mockCtx({
       "martial-god-asura?toc=2": ok(TOC_PAGE_2),
       "martial-god-asura": ok(NOVEL_HTML),
     });
-    const before = Date.now();
     const chapters = await ext.parseChapterList("https://lite.wuxiaworld.com/novel/martial-god-asura", ctx);
     // NOVEL_HTML claims 68 pages but only page 2 is mocked; the rest fail and are skipped.
     expect(chapters.length).toBe(3);
@@ -109,9 +108,10 @@ describe("site:wuxiaworld extension", () => {
     expect(chapters[1].number).toBe(101);
     expect(chapters[2].number).toBe(102);
     expect(chapters[2].title).toBe("Chapter 102 Bizarre Hall");
+    // The site publishes no per-chapter dates: no fabricated crawl-time stamp —
+    // missing dates stay unset so undated novels never flood "Today".
     for (const c of chapters) {
-      expect(typeof c.uploadedAt).toBe("number");
-      expect(c.uploadedAt).toBeGreaterThanOrEqual(before);
+      expect(c.uploadedAt).toBeUndefined();
     }
   });
 

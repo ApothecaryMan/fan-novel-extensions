@@ -46,7 +46,7 @@ describe("site:truthnovel extension", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.1.7");
+    expect(ext.version).toBe("1.1.8");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -219,6 +219,13 @@ describe("site:truthnovel extension", () => {
       }
     ];
 
+    const sampleChapterHtml = `
+      <div id="comment-58826" class="wpd-comment-right">
+        <div class="wpd-comment-header">اورابوراس</div>
+        <div class='wpd-vote-result wpd-vote-result-like' title='15'>15</div>
+      </div>
+    `;
+
     const ctx = mockCtx({
       "/wp-json/wp/v2/comments": (url) => {
         return {
@@ -230,15 +237,18 @@ describe("site:truthnovel extension", () => {
           },
           text: JSON.stringify(mockComments)
         };
-      }
+      },
+      "https://truthnovel.top/2432-decision/": ok(sampleChapterHtml)
     });
 
     const res = await ext.getAuthorComments("اورابوراس", 1, ctx);
     expect(res.authorName).toBe("اورابوراس");
     expect(res.totalComments).toBe(108);
+    expect(res.totalLikes).toBe(15);
     expect(res.hasMore).toBe(true);
     expect(res.comments.length).toBe(1);
     expect(res.comments[0].id).toBe("58826");
+    expect(res.comments[0].likes).toBe(15);
     expect(res.comments[0].chapterTitle).toBe("2432 -قرار روبين");
     expect(res.comments[0].chapterUrl).toBe("https://truthnovel.top/2432-decision/");
     expect(res.comments[0].body).toBe("تعليق تجريبي رائع …");

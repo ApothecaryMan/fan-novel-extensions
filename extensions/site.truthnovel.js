@@ -25,7 +25,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.1.7",
+  version: "1.1.8",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -696,18 +696,53 @@ registerExtension({
         }
       }
 
-      var likes = 0;
-      totalLikes += likes;
+      var chapterUrl = (c.link ? c.link.split("#")[0] : "") || postInfo.link || "";
 
       comments.push({
         id: String(c.id),
         body: body,
         createdAt: dateMs,
-        likes: likes,
+        likes: 0,
         chapterTitle: postInfo.title || ("الفصل " + (c.post || "")),
-        chapterUrl: postInfo.link || "",
+        chapterUrl: chapterUrl,
         images: images.length > 0 ? images.slice(0, 4) : undefined
       });
+    }
+
+    // Fetch chapter pages to extract real wpDiscuz likes
+    var uniqueChapterUrls = [];
+    for (var k = 0; k < comments.length; k++) {
+      var cu = comments[k].chapterUrl;
+      if (cu && uniqueChapterUrls.indexOf(cu) === -1) {
+        uniqueChapterUrls.push(cu);
+      }
+    }
+
+    for (var u = 0; u < Math.min(uniqueChapterUrls.length, 10); u++) {
+      var chUrl = uniqueChapterUrls[u];
+      try {
+        var pageRes = await _fetchCachedPage(this._absUrl(chUrl), ctx);
+        if (pageRes && pageRes.ok && pageRes.text) {
+          var pageHtml = pageRes.text;
+          for (var ci = 0; ci < comments.length; ci++) {
+            if (comments[ci].chapterUrl === chUrl) {
+              var cid = comments[ci].id;
+              var idx = pageHtml.indexOf('id="comment-' + cid + '"');
+              if (idx !== -1) {
+                var window_ = pageHtml.substr(idx, 6000);
+                var vm = window_.match(/wpd-vote-result[^>]*title=['"](-?\d+)['"]/);
+                if (vm) {
+                  var v = parseInt(vm[1], 10);
+                  if (!isNaN(v) && v >= 0) {
+                    totalLikes += v - comments[ci].likes;
+                    comments[ci].likes = v;
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (pe) { /* non-fatal: keep 0 */ }
     }
 
     return {

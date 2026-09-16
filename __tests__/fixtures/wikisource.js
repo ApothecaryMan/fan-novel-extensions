@@ -96,3 +96,31 @@ export const CATEGORY_JSON = JSON.stringify({
     ]
   }
 });
+
+export const PORTAL_HTML = `<!DOCTYPE html>
+<html><body>
+<div id="mw-content-text"><div class="mw-parser-output" lang="ar" dir="rtl">
+<ul><li><a href="/wiki/%D9%83%D9%84%D9%8A%D9%84%D8%A9_%D9%88%D8%AF%D9%85%D9%86%D8%A9" title="كليلة ودمنة">كليلة ودمنة</a></li>
+<li><a href="/wiki/%D8%A3%D9%84%D9%81_%D9%84%D9%8A%D9%84%D8%A9_%D9%88%D9%84%D9%8A%D9%84%D8%A9" title="ألف ليلة وليلة">ألف ليلة وليلة</a></li>
+<li><a href="/wiki/%D9%85%D8%A4%D9%84%D9%81:%D8%A7%D8%A8%D9%86_%D8%A7%D9%84%D9%85%D9%82%D9%81%D8%B9" title="مؤلف">ابن المقفع</a></li></ul>
+</div></div>
+</body></html>`;
+
+export const SUBPAGE_LONG_FEW_H2 =
+  '<div id="mw-content-text"><div class="mw-parser-output" lang="ar" dir="rtl">' +
+  '<p>مقدمة طويلة.</p>' +
+  '<h2 id="fasl_one">الفصل الأول</h2>' +
+  '<p>نص طويل جدا.</p>'.repeat(200) +
+  '<h2 id="fasl_two">الفصل الثاني</h2>' +
+  '<p>نص طويل جدا.</p>'.repeat(200) +
+  '</div></div>';
+
+export const SUBPAGE_SELF_H2 =
+  '<div id="mw-content-text"><div class="mw-parser-output" lang="ar" dir="rtl">' +
+  '<h2 id="a">الباب الأول</h2><p>نص.</p>' +
+  '<h2 id="b">الباب الثاني</h2><p>نص.</p>' +
+  '<h2 id="c">الباب الثالث</h2><p>نص.</p>' +
+  '<h2 id="d">الباب الرابع</h2><p>نص.</p>' +
+  '<h2 id="e">الباب الخامس</h2><p>نص.</p>' +
+  '<h2 id="f">الباب السادس</h2><p>نص.</p>' +
+  '</div></div>';

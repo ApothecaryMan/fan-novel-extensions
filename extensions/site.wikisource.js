@@ -19,7 +19,9 @@ var _HTML_CACHE_CAP = 24;
 var _inFlight = Object.create(null); // url -> Promise
 
 var _H2_SPLIT_MIN = 5;
-var _CHAR_SPLIT_MIN = 15000;
+
+// Headings that are site chrome, never chapters.
+var _META_H2_RE = /^(المحتويات|طبعات|انظر أيضا|انظر أيضاً|مراجع|مصادر|وصلات خارجية|هوامش|ملاحظات|تصنيفات|وصلات|روابط)/;
 
 function _fetchCachedRaw(url, ctx) {
   var now = Date.now();
@@ -137,18 +139,29 @@ registerExtension({
 
   _contentRoot: function (html) {
     if (!html) return '';
+    var balanced = this._extractBalancedDiv(html, 'mw-parser-output');
+    if (balanced) return balanced;
     var m = html.match(/<div[^>]*class="[^"]*mw-parser-output[^"]*"[^>]*>([\s\S]*?)<\/div>\s*(?:<noscript|<div class="printfooter")/i);
     if (m) return m[1];
-    var greedy = html.match(/<div[^>]*class="[^"]*mw-parser-output[^"]*"[^>]*>([\s\S]*)<\/div>/i);
-    if (greedy) {
-      // Trim MediaWiki chrome that follows content inside the greedy match.
-      var c = greedy[1]
-        .replace(/<div class="printfooter"[\s\S]*$/i, '')
-        .replace(/<div id="catlinks"[\s\S]*$/i, '');
-      return c;
-    }
     var body = html.match(/<div[^>]*id="mw-content-text"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/main>/i);
     return body ? body[1] : html;
+  },
+
+  _extractBalancedDiv: function (html, className) {
+    if (!html) return null;
+    var openRe = new RegExp('<div[^>]*class="[^"]*' + className + '[^"]*"[^>]*>', 'i');
+    var open = openRe.exec(html);
+    if (!open) return null;
+    var startInner = open.index + open[0].length;
+    var tagRe = /<\/?div\b[^>]*>/gi;
+    tagRe.lastIndex = startInner;
+    var depth = 1;
+    var m;
+    while ((m = tagRe.exec(html)) !== null) {
+      depth += (m[0].charAt(1) === '/' ? -1 : 1);
+      if (depth === 0) return html.substring(startInner, m.index);
+    }
+    return null;
   },
 
   _cleanContentRoot: function (rootHtml) {
@@ -235,36 +248,43 @@ registerExtension({
     return this._decodeEntities(this._stripTags(cleanRoot || '')).length;
   },
 
-  _firstImage: function (html) {
-    if (!html) return undefined;
-    var m = html.match(/<img[^>]+src="((?:https:)?\/\/thumb\.wikimedia\.org[^"]+)"[^>]*>/i) ||
-            html.match(/<img[^>]+src="(https:\/\/upload\.wikimedia\.org[^"]+)"[^>]*>/i);
-    if (!m) return undefined;
-    var src = m[1];
-    if (src.indexOf('//') === 0) src = 'https:' + src;
-    return src;
-  },
-
+  // Real topic categories only (hrefs are percent-encoded): skip proofread
+  // progress ("25%") and maintenance cats.
   _categories: function (html) {
     var tags = [];
     if (!html) return tags;
-    var catDiv = html.match(/<div[^>]*id="mw-normal-catlinks"[^>]*>([\s\S]*?)<\/div>/i);
-    var scope = catDiv ? catDiv[1] : html;
-    var re = /<a[^>]+href="\/wiki\/[^"]*"[^>]*title="[^"]*"[^>]*>([^<]+)<\/a>/gi;
-    var m;
     var seen = Object.create(null);
-    while ((m = re.exec(scope)) !== null) {
-      var t = this._decodeEntities(m[1]).trim();
+    var re = /<a[^>]+href="\/wiki\/((?:%[0-9A-Fa-f]{2}|[^"#?\s])+)"[^>]*>([^<]*)<\/a>/gi;
+    var m;
+    while ((m = re.exec(html)) !== null) {
+      var raw;
+      try { raw = decodeURIComponent(m[1]).replace(/_/g, ' ').trim(); } catch (e) { continue; }
+      if (raw.indexOf('تصنيف:') !== 0) continue;
+      var t = this._decodeEntities(m[2] || '').trim();
+      if (!t) t = raw.substring('تصنيف:'.length);
       if (!t || seen[t]) continue;
-      if (/^(تصنيف|مؤلف|ويكي مصدر|صفحات|نصوص)/.test(t) && catDiv) {
-        // Keep real topic cats, drop maintenance ones below.
-      }
-      if (/صفحات تحوي|مجهولة المصدر|بوصلة موجودة|تحتاج|مطبوع/.test(t)) continue;
+      if (/^\d+%?$/.test(t)) continue;
+      if (/صفحات تحوي|مجهولة المصدر|بوصلة موجودة|تحتاج|مطبوع|مقالات بدون|جميع المقالات/.test(t)) continue;
       seen[t] = true;
       tags.push(t);
       if (tags.length >= 8) break;
     }
     return tags;
+  },
+
+  _firstImage: function (html) {
+    if (!html) return undefined;
+    var re = /<img[^>]+src="((?:https:)?:?\/\/(?:thumb|upload)\.wikimedia\.org[^"]+)"[^>]*>/gi;
+    var m;
+    while ((m = re.exec(html)) !== null) {
+      var src = m[1];
+      if (/Wikidata-logo|EPUB|Mobi|mobi|Document-|Gnome-|Wikipedia-logo|OOjs|Ambox|Commons-logo|Wikisource-logo|Question_book|P_|Bible\.png|Jerusalem_dome/i.test(src)) continue;
+      var px = src.match(/\/(\d+)px-/);
+      if (px && parseInt(px[1], 10) < 80) continue;
+      if (src.indexOf('//') === 0) src = 'https:' + src;
+      return src;
+    }
+    return undefined;
   },
 
   _authorFromHtml: function (html) {
@@ -317,9 +337,15 @@ registerExtension({
 
     var root = this._cleanContentRoot(this._contentRoot(html));
     var summary = '';
-    var pm = root.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
-    if (pm) {
-      summary = this._cleanInline(pm[1]);
+    var pRe = /<p[^>]*>([\s\S]*?)<\/p>/gi;
+    var pm;
+    var sumParts = [];
+    while ((pm = pRe.exec(root)) !== null && sumParts.length < 3) {
+      var pt = this._cleanInline(pm[1]);
+      if (pt) sumParts.push(pt);
+    }
+    if (sumParts.length > 0) {
+      summary = sumParts.join('\n\n');
       if (summary.length > 600) summary = summary.substring(0, 600).trim() + '…';
     }
 
@@ -379,9 +405,16 @@ registerExtension({
           continue;
         }
         var subRoot = self._cleanContentRoot(self._contentRoot(subHtml));
-        var h2 = self._extractH2(subRoot);
-        var len = self._textLength(subRoot);
-        if (h2.length >= _H2_SPLIT_MIN || len >= _CHAR_SPLIT_MIN) {
+        // Expand only on 5+ real story headings. Anything smaller stays one
+        // chapter — expanding on size alone drops pages with few headings.
+        var h2 = self._extractH2(subRoot).filter(function (h) {
+          if (_META_H2_RE.test(h.title)) return false;
+          var normH = h.title.replace(/\s+/g, ' ').trim();
+          var normSp = sp.title.replace(/\s+/g, ' ').trim();
+          if (normH === normSp) return false;
+          return true;
+        });
+        if (h2.length >= _H2_SPLIT_MIN) {
           for (var j = 0; j < h2.length; j++) {
             chapters.push({
               url: sp.url.split('#')[0] + '#' + h2[j].id,
@@ -394,6 +427,9 @@ registerExtension({
         }
       }
     } else {
+      var h2main = this._extractH2(root).filter(function (h) {
+        return !_META_H2_RE.test(h.title);
+      });
       var h2main = this._extractH2(root);
       if (h2main.length > 0) {
         for (var k = 0; k < h2main.length; k++) {
@@ -500,6 +536,47 @@ registerExtension({
     return this._mapSearchResults(json);
   },
 
+  // Curated portal shelves (بوابة:قصة ...) — the only reliable browse lists.
+  // Categorymembers is too sparse (تصنيف:قصة holds a single page).
+  _parsePortalWorks: function (rootHtml) {
+    var out = [];
+    var seen = Object.create(null);
+    if (!rootHtml) return out;
+    var re = /<a[^>]+href="(\/wiki\/([^"#?]+))"[^>]*>([^<]{2,80})<\/a>/gi;
+    var m;
+    while ((m = re.exec(rootHtml)) !== null) {
+      var raw;
+      try { raw = decodeURIComponent(m[2]).replace(/_/g, ' ').trim(); } catch (e) { continue; }
+      if (!raw || raw.indexOf(':') !== -1) continue;
+      if (/^(الصفحة الرئيسية|تصفح|مساعدة|الميدان)$/.test(raw)) continue;
+      var full = this._absUrl(m[1]);
+      if (seen[full]) continue;
+      seen[full] = true;
+      var label = this._decodeEntities(this._stripTags(m[3])).trim() || raw;
+      out.push({
+        source: this.id,
+        url: full,
+        title: label,
+        author: 'ويكي مصدر',
+        category: 'نصوص حرة',
+        status: 'مكتملة'
+      });
+    }
+    return out;
+  },
+
+  _browsePortal: async function (portal, ctx) {
+    var html;
+    try {
+      html = await this._fetchHtml(
+        this._absUrl('/wiki/' + encodeURIComponent(('بوابة:' + portal).replace(/ /g, '_'))), ctx
+      );
+    } catch (e) {
+      return null;
+    }
+    return this._parsePortalWorks(this._cleanContentRoot(this._contentRoot(html)));
+  },
+
   _mapCategoryMembers: function (json) {
     var out = [];
     if (!json || !json.query || !json.query.categorymembers) return { results: out, cont: null };
@@ -545,17 +622,22 @@ registerExtension({
   },
 
   getPopularNovels: async function (page, ctx) {
-    var out = await this._browseCategory('قصة', page, ctx);
+    var pageNum = (page && page > 1) ? Math.floor(page) : 1;
+    if (pageNum > 1) return [];
+    var out = await this._browsePortal('قصة', ctx);
     return out || [];
   },
 
   // ---------------------------------------------------------------
   // Category / Topic browsing
   // ---------------------------------------------------------------
+  // Portal shelves for the two verified portals, API fallback otherwise.
+  _PORTAL_BY_SLUG: { 'qissa': 'قصة', 'shi3r': 'شعر' },
+
   getCategories: async function () {
     return [
-      { name: 'قصص وروايات', slug: 'قصة' },
-      { name: 'شعر', slug: 'شعر' },
+      { name: 'قصص وروايات', slug: 'qissa' },
+      { name: 'شعر', slug: 'shi3r' },
       { name: 'مقامات', slug: 'مقامات' },
       { name: 'كتب إسلامية', slug: 'كتب إسلامية' },
       { name: 'نصوص تاريخية', slug: 'تاريخ' },
@@ -568,7 +650,14 @@ registerExtension({
   },
 
   getCategoryNovels: async function (categorySlug, page, ctx) {
-    var slug = (categorySlug || 'قصة').trim() || 'قصة';
+    var slug = (categorySlug || 'qissa').trim() || 'qissa';
+    var portal = Object.prototype.hasOwnProperty.call(this._PORTAL_BY_SLUG, slug)
+      ? this._PORTAL_BY_SLUG[slug]
+      : null;
+    if (portal) {
+      var works = await this._browsePortal(portal, ctx);
+      if (works && works.length > 0) return works;
+    }
     var out = await this._browseCategory(slug, page, ctx);
     return out || [];
   }

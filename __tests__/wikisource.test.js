@@ -8,7 +8,10 @@ import {
   DIWAN_MAIN,
   CHAPTER_VERSE,
   SEARCH_JSON,
-  CATEGORY_JSON
+  CATEGORY_JSON,
+  PORTAL_HTML,
+  SUBPAGE_LONG_FEW_H2,
+  SUBPAGE_SELF_H2
 } from './fixtures/wikisource.js';
 
 let ext;
@@ -123,9 +126,42 @@ describe('Wikisource Parsing logic with fixtures', () => {
     expect(results[0].url).toContain('/wiki/');
   });
 
+  it('keeps long subpages with few headings as one chapter (no drop)', async () => {
+    const url = 'https://ar.wikisource.org/wiki/twila';
+    const sub = 'https://ar.wikisource.org/wiki/twila/part1';
+    const main = '<div id="mw-content-text"><div class="mw-parser-output"><ul><li><a href="/wiki/twila/part1">الجزء الأول</a></li></ul></div></div>';
+    const ctx = mockCtx({ [sub]: ok(SUBPAGE_LONG_FEW_H2), [url]: ok(main) });
+    const chapters = await ext.parseChapterList(url, ctx);
+
+    expect(chapters.length).toBe(1);
+    expect(chapters[0].url).toBe(sub);
+    expect(chapters[0].title).toBe('الجزء الأول');
+  });
+
+  it('skips self-titled headings when expanding (no "X — X")', async () => {
+    const url = 'https://ar.wikisource.org/wiki/selfbook';
+    const sub = 'https://ar.wikisource.org/wiki/selfbook/part';
+    const main = '<div id="mw-content-text"><div class="mw-parser-output"><ul><li><a href="/wiki/selfbook/part">الباب الأول</a></li></ul></div></div>';
+    const ctx = mockCtx({ [sub]: ok(SUBPAGE_SELF_H2), [url]: ok(main) });
+    const chapters = await ext.parseChapterList(url, ctx);
+
+    expect(chapters.length).toBe(5);
+    expect(chapters.every(c => c.title !== 'الباب الأول — الباب الأول')).toBe(true);
+    expect(chapters[0].title).toBe('الباب الأول — الباب الثاني');
+  });
+
+  it('browses popular works from the story portal', async () => {
+    const ctx = mockCtx({ '%D8%A8%D9%88%D8%A7%D8%A8%D8%A9': ok(PORTAL_HTML) });
+    const results = await ext.getPopularNovels(1, ctx);
+
+    expect(results.length).toBe(2);
+    expect(results[0].title).toBe('كليلة ودمنة');
+    expect(results[1].title).toBe('ألف ليلة وليلة');
+  });
+
   it('browses category members skipping non-main namespace', async () => {
     const ctx = mockCtx({ 'categorymembers': ok(CATEGORY_JSON) });
-    const results = await ext.getPopularNovels(1, ctx);
+    const results = await ext.getCategoryNovels('مقامات', 1, ctx);
 
     expect(results.length).toBe(2);
     expect(results[0].title).toBe('ألف ليلة وليلة');
@@ -134,7 +170,7 @@ describe('Wikisource Parsing logic with fixtures', () => {
   it('returns story categories', async () => {
     const categories = await ext.getCategories();
     expect(categories.length).toBeGreaterThan(5);
-    const qissa = categories.find(c => c.slug === 'قصة');
+    const qissa = categories.find(c => c.slug === 'qissa');
     expect(qissa).toBeDefined();
   });
 });

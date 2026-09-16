@@ -58,7 +58,7 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:cenele'));
   it('has correct name', () => expect(ext.name).toBe('فضاء الروايات'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.10.0'));
+  it('has correct version', () => expect(ext.version).toBe('1.10.1'));
   it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://cenele.com'));
 
@@ -483,6 +483,9 @@ describe('getComments (RSP)', () => {
   const cardTop = (id, author, time, body, likes) =>
     '<div class="rspc-comment" data-id="' + id + '">' +
     '<div class="rspc-comment__head"><span class="rspc-comment__author">' + author + '</span>' +
+    // Chrome that must NEVER surface as attachments: avatar + XP level badge.
+    '<img class="rspc-avatar__img" src="https://cenele.com/avatar/u1.png" />' +
+    '<span class="rspc-user__level"><img class="nhv-xpl-badge-chip__img" src="https://cenele.com/badges/medal-gold.png" /></span>' +
     '<span class="rspc-comment__time">' + time + '</span></div>' +
     '<div class="rspc-comment__text"><p>' + body + '</p></div>' +
     '<div class="rspc-actions-inline"><button class="rspc-vote rspc-vote--like" data-comment-id="' + id + '" data-vote="like">' +
@@ -536,6 +539,7 @@ describe('getComments (RSP)', () => {
     expect(top.author).toBe('قارئ');
     expect(top.likes).toBe(5);
     expect(top.parentId).toBeNull();
+    expect(top.images).toBeUndefined();
     const reply = res.comments.find((c) => c.id === '102');
     expect(reply.parentId).toBe('101');
     expect(reply.body).toBe('شكرا لك');

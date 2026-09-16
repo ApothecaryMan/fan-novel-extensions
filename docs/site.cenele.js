@@ -61,7 +61,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.10.0',
+  version: '1.10.1',
   apiVersion: 2,
   baseUrl: 'https://cenele.com',
 
@@ -873,6 +873,39 @@ registerExtension({
     return { html: out, blocks: blocks };
   },
 
+  // Attachment images live ONLY in these containers (. __images / __image /
+  // __sticker / __gif, any level prefix). Everything else that renders an
+  // <img> inside a card — avatars, XP-level badge chips
+  // (.rspc-user__level .nhv-xpl-badge-chip__img, present on every comment),
+  // role badges, emoji — is chrome and must never surface as an attachment.
+  _rspcRegionImages: function (html) {
+    var images = [];
+    var openRe = /<div[^>]*class="[^"]*__(?:images|image|sticker|gif)\b[^"]*"[^>]*>/gi;
+    var om;
+    while ((om = openRe.exec(html)) !== null && images.length < 4) {
+      var startInner = om.index + om[0].length;
+      var tagRe = /<\/?div\b[^>]*>/gi;
+      tagRe.lastIndex = startInner;
+      var depth = 1;
+      var m;
+      var endInner = html.length;
+      while ((m = tagRe.exec(html)) !== null) {
+        depth += (m[0].charAt(1) === '/' ? -1 : 1);
+        if (depth === 0) { endInner = m.index; break; }
+      }
+      var region = html.slice(startInner, endInner);
+      var ir = /<img[^>]*>/gi;
+      var im;
+      while ((im = ir.exec(region)) !== null && images.length < 4) {
+        if (/avatar/i.test(im[0])) continue;
+        var sm = im[0].match(/src="([^"]+)"/i);
+        if (sm && /^https?:\/\//i.test(sm[1]) && images.indexOf(sm[1]) === -1) images.push(sm[1]);
+      }
+      openRe.lastIndex = endInner;
+    }
+    return images;
+  },
+
   // Extract one card's fields. `p` is the level prefix:
   // 'rspc-comment' | 'rspc-reply-item' | 'rspc-subreply'.
   _rspcNode: function (id, html, parentId, p, fullUrl) {
@@ -900,14 +933,7 @@ registerExtension({
     var body = paras.length ? paras.join('\n\n') : this._decodeEntities(this._stripTags(bodyHtml)).trim();
     if (!body) return null;
     if (/spoiler/i.test(html)) body = '[حرق] ' + body;
-    var images = [];
-    var ir = /<img[^>]*>/gi;
-    var im;
-    while ((im = ir.exec(html)) !== null && images.length < 4) {
-      if (/avatar/i.test(im[0])) continue;
-      var sm = im[0].match(/src="([^"]+)"/i);
-      if (sm && /^https?:\/\//i.test(sm[1]) && images.indexOf(sm[1]) === -1) images.push(sm[1]);
-    }
+    var images = this._rspcRegionImages(html);
     var likeM = html.match(/class="[^"]*rspc-like-count[^"]*"[^>]*>([\s\S]*?)</i);
     var likes = likeM ? parseInt(this._toLatinDigits(this._stripTags(likeM[1])), 10) : 0;
     if (isNaN(likes) || likes < 0) likes = 0;

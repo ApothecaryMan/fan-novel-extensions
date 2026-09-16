@@ -1,6 +1,6 @@
 // @id       site:shamela
 // @name     المكتبة الشاملة
-// @version  1.0.0
+// @version  1.1.0
 // @lang     ar
 // @apiVersion 1
 // @baseUrl  https://shamela.ws
@@ -11,8 +11,10 @@
 //   - TOC links (/book/{id}/{pageId}) from div.betaka-index / div.s-nav, deduped by URL
 //     (the site repeats the same pageId for several logical titles).
 //   - Collapsed [+] nodes expanded via GET ajax/titlechilds/{book}/{node}.
-//   - Content via GET ajax/pageContent/{book}/{page} JSON ({nass,title,pageNum,
-//     nextId,prevId}), with div.nass HTML fallback.
+//   - Content: TOC entries are bab *starts*, not full babs. parseChapterContent
+//     stitches GET ajax/pageContent/{book}/{page} JSON ({nass,title,pageNum,
+//     nextId,prevId}) following nextId until the next TOC pageId (exclusive),
+//     with div.nass HTML fallback for the first page only.
 
 var _htmlCache = Object.create(null); // url -> { data, ts }
 var _HTML_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -54,7 +56,7 @@ registerExtension({
   id: 'site:shamela',
   name: 'المكتبة الشاملة',
   lang: 'ar',
-  version: '1.0.0',
+  version: '1.1.0',
   apiVersion: 1,
   baseUrl: 'https://shamela.ws',
 
@@ -325,8 +327,39 @@ registerExtension({
   },
 
   // ---------------------------------------------------------------
-  // Chapter Content — pageContent JSON first, div.nass fallback
+  // Chapter Content — stitch all printed pages of a bab.
+  // TOC links are only bab *start* pages (e.g. باب الأسد والثور = p83..p145).
+  // A single pageContent call is ~100-200 words, so we follow nextId until
+  // the next TOC pageId (exclusive), capped at 150 pages.
   // ---------------------------------------------------------------
+  _orderedTocPageIds: function (html) {
+    var links = this._collectTocLinks(html);
+    var ids = [];
+    var seen = Object.create(null);
+    for (var i = 0; i < links.length; i++) {
+      var pid = this._pageIdFromUrl(links[i].url);
+      if (!pid || seen[pid]) continue;
+      seen[pid] = true;
+      ids.push(pid);
+    }
+    return ids;
+  },
+
+  _stopPageIdFor: async function (bookId, pageId, ctx) {
+    try {
+      var html = await this._fetchText(this._absUrl('/book/' + bookId), ctx);
+      var ids = this._orderedTocPageIds(html);
+      if (ids.length === 0) return undefined; // no TOC — unknown boundary
+      for (var i = 0; i < ids.length; i++) {
+        if (String(ids[i]) === String(pageId)) {
+          return (i + 1 < ids.length) ? String(ids[i + 1]) : null;
+        }
+      }
+      return undefined; // current page not in TOC — unknown boundary
+    } catch (e) {
+      return undefined; // TOC unreachable — caller falls back to single page
+    }
+  },
   _cleanNass: function (nassHtml) {
     var c = String(nassHtml || '');
     c = c.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
@@ -353,13 +386,45 @@ registerExtension({
     var pageId = this._pageIdFromUrl(chapterUrl);
     if (!bookId || !pageId) throw new Error('رابط الفصل غير صالح');
 
-    // Primary: pageContent JSON API.
-    try {
-      var json = await this._fetchJson(this._absUrl('/ajax/pageContent/' + bookId + '/' + pageId), ctx);
-      if (json && json.nass) return this._cleanNass(json.nass);
-    } catch (e) {
-      // Fall through to HTML scraping.
+    // Find where this bab ends (next TOC start page, exclusive).
+    // undefined = TOC unknown -> single-page safe fallback (old behavior).
+    var stopId = await this._stopPageIdFor(bookId, pageId, ctx);
+
+    // Primary: pageContent JSON API, stitched across printed pages.
+    var parts = [];
+    if (stopId !== undefined) {
+    var cur = String(pageId);
+    var visited = Object.create(null);
+    for (var step = 0; step < 150 && cur && !visited[cur]; step++) {
+      if (stopId && cur === stopId) break;
+      visited[cur] = true;
+      var json = null;
+      try {
+        json = await this._fetchJson(this._absUrl('/ajax/pageContent/' + bookId + '/' + cur), ctx);
+      } catch (e) {
+        json = null;
+      }
+      if (!json || !json.nass) break;
+      try {
+        parts.push(this._cleanNass(json.nass));
+      } catch (e) {
+        // Skip empty pages but keep walking.
+      }
+      var nxt = (json.nextId !== undefined && json.nextId !== null) ? String(json.nextId) : '';
+      if (!nxt || nxt === 'null' || nxt === 'undefined' || nxt === cur) break;
+      cur = nxt;
     }
+    }
+    if (parts.length > 0) return parts.join('\n\n');
+
+    // Single-page fallback (unknown boundary or stitched fetch failed).
+    var single = null;
+    try {
+      single = await this._fetchJson(this._absUrl('/ajax/pageContent/' + bookId + '/' + pageId), ctx);
+    } catch (e) {
+      single = null;
+    }
+    if (single && single.nass) return this._cleanNass(single.nass);
 
     var html = await this._fetchText(this._absUrl('/book/' + bookId + '/' + pageId), ctx);
     var nm = html.match(/<div[^>]*class="[^"]*\bnass\b[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<div[^>]*id="appended_pages"/i) ||

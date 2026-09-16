@@ -5,9 +5,15 @@ registerExtension({
   id: 'site:kolnovel',
   name: 'كول نوفيل',
   lang: 'ar',
-  version: '1.5.4',
-  apiVersion: 1,
+  version: '1.6.0',
+  apiVersion: 2,
   baseUrl: 'https://kolnovel.com',
+
+  // Custom comment backend (PocketBase). Chapter pages embed:
+  // <kol-comments slug entity-title entity-url entity-id="WP_POST_ID"
+  //   entity-type="post" series-id="WP_SERIES_ID"> which resolves via
+  // entities/ensure to a PocketBase entity UUID for comments/comment_net.
+  _cmtApi: 'https://cmtapi.kolnovel.com',
 
   // ---------------------------------------------------------------
   // Helpers
@@ -745,8 +751,7 @@ registerExtension({
   // ---------------------------------------------------------------
   // maindet card parser — shared by searchNovels Strategy 1 and getCategoryNovels
   // ---------------------------------------------------------------
-  _parseMaindetCards: function (html) {
-    var results = [];
+  _parseMaindetCards: function (html) {    var results = [];
     var seen = {};
     var maindetRegex = /<article[^>]*class="[^"]*maindet[^"]*"[^>]*>([\s\S]*?)<\/article>/gi;
     var mdMatch;
@@ -787,5 +792,175 @@ registerExtension({
       });
     }
     return results;
+  },
+
+  // ---------------------------------------------------------------
+  // Chapter comments — read-only via cmtapi.kolnovel.com (PocketBase).
+  // 1. GET chapter HTML -> <kol-comments slug entity-title
+  //    entity-id="WP_POST_ID" series-id="WP_SERIES_ID">
+  // 2. POST /api/kol/entities/ensure -> PocketBase entity UUID + commentsCount
+  // 3. GET /api/collections/comments/records?filter=entity="UUID"
+  //    (Lexical JSON in `text`, plain fallback in `normalizedContent`)
+  // 4. GET /api/collections/comment_net/records?filter=entity="UUID"
+  //    ({comment, likes, dislikes, net}) -> mapped to likes.
+  // Write/vote require a KolNovel login (PocketBase auth), so postComment
+  // and voteComment throw a clear message.
+  // ---------------------------------------------------------------
+  _cmtTag: function (html) {
+    var m = html.match(/<kol-comments\s+([^>]*?)>/i);
+    if (!m) return null;
+    var attrs = m[1];
+    var get = function (name) {
+      var r = attrs.match(new RegExp(name + '\\s*=\\s*"([^"]*)"', 'i'));
+      return r ? r[1] : '';
+    };
+    var wpPostId = parseInt(get('entity-id'), 10);
+    if (isNaN(wpPostId) || wpPostId <= 0) return null;
+    var wpSeriesId = parseInt(get('series-id'), 10);
+    if (isNaN(wpSeriesId) || wpSeriesId < 0) wpSeriesId = 0;
+    return {
+      slug: get('slug'),
+      title: this._decodeEntities(get('entity-title')),
+      wpPostId: wpPostId,
+      wpSeriesId: wpSeriesId
+    };
+  },
+
+  // Lexical JSON ({"root":{"children":[{"children":[{"text":...}]...}]}})
+  // -> plain text. Paragraph blocks joined with blank lines; emoji nodes
+  // use their alt text; unknown nodes are skipped. Falls back to
+  // `normalizedContent` when parsing fails or yields nothing.
+  _lexicalToText: function (lexStr, fallback) {
+    var blocks = [];
+    try {
+      var doc = JSON.parse(lexStr);
+      var root = doc && doc.root && doc.root.children;
+      if (root && root.length) {
+        var walk = function (node) {
+          if (!node) return '';
+          if (node.type === 'text') return node.text || '';
+          if (node.type === 'emoji') return node.alt || node.text || ' ';
+          if (node.children && node.children.length) {
+            var parts = [];
+            for (var i = 0; i < node.children.length; i++) {
+              parts.push(walk(node.children[i]));
+            }
+            return parts.join('');
+          }
+          return '';
+        };
+        for (var b = 0; b < root.length; b++) {
+          var t = walk(root[b]).replace(/[ \t\u00A0]+/g, ' ').trim();
+          if (t) blocks.push(t);
+        }
+      }
+    } catch (e) { /* fall through to normalizedContent */ }
+    if (blocks.length > 0) return blocks.join('\n\n');
+    return (fallback || '').replace(/\s+/g, ' ').trim();
+  },
+
+  _cmtJson: async function (url, ctx, label, init) {
+    var res;
+    try {
+      res = init ? await ctx.xFetch(url, init) : await ctx.xFetch(url);
+    } catch (e) {
+      throw new Error(label + ': ' + (e && e.message ? e.message : String(e)));
+    }
+    if (!res.ok) throw new Error(label + ': ' + res.status);
+    try {
+      return JSON.parse(res.text);
+    } catch (e) {
+      throw new Error('رد غير متوقع من نظام التعليقات');
+    }
+  },
+
+  getComments: async function (chapterUrl, ctx) {
+    var fullUrl = this._absUrl(chapterUrl);
+    var pageRes = await this._safeFetch(fullUrl, ctx, 'فشل جلب صفحة الفصل');
+    if (!pageRes.ok) throw new Error('فشل جلب صفحة الفصل: ' + pageRes.status);
+    var tag = this._cmtTag(pageRes.text || '');
+    if (!tag) return { count: 0, comments: [] };
+
+    var ensure = await this._cmtJson(this._cmtApi + '/api/kol/entities/ensure', ctx, 'فشل تجهيز التعليقات', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        slug: tag.slug || '',
+        title: tag.title || '',
+        url: fullUrl,
+        wpPostId: tag.wpPostId,
+        wpPostType: 'post',
+        wpSeriesId: tag.wpSeriesId
+      })
+    });
+    var pbId = ensure && ensure.id;
+    if (!pbId) return { count: 0, comments: [] };
+    var total = ensure.commentsCount || 0;
+
+    var filter = encodeURIComponent('entity="' + pbId + '"');
+    var list = await this._cmtJson(
+      this._cmtApi + '/api/collections/comments/records?page=1&perPage=100&sort=created&expand=author&filter=' + filter,
+      ctx, 'فشل جلب التعليقات');
+    var items = (list && list.items) || [];
+    // Paginate when a chapter exceeds one page (cap 500 to bound requests).
+    var totalPages = (list && list.totalPages) || 1;
+    for (var p = 2; p <= Math.min(totalPages, 5); p++) {
+      var extra = await this._cmtJson(
+        this._cmtApi + '/api/collections/comments/records?page=' + p + '&perPage=100&sort=created&expand=author&filter=' + filter,
+        ctx, 'فشل جلب التعليقات');
+      if (extra && extra.items) items = items.concat(extra.items);
+    }
+
+    var netMap = {};
+    try {
+      var net = await this._cmtJson(
+        this._cmtApi + '/api/collections/comment_net/records?page=1&perPage=100&filter=' + filter,
+        ctx, 'فشل جلب الإعجابات');
+      var nets = (net && net.items) || [];
+      for (var n = 0; n < nets.length; n++) {
+        var row = nets[n];
+        var key = row.comment || row.id;
+        var v = parseInt(typeof row.net !== 'undefined' ? row.net : row.likes, 10);
+        if (isNaN(v) || v < 0) v = 0;
+        if (key) netMap[key] = v;
+      }
+    } catch (e2) { /* non-fatal: likes stay 0 */ }
+
+    var comments = [];
+    for (var i = 0; i < items.length; i++) {
+      var c = items[i];
+      if (!c || c.isDeleted) continue;
+      var body = this._lexicalToText(c.text || '', c.normalizedContent || '');
+      if (!body) continue;
+      if (c.containsSpoiler) body = '[حرق] ' + body;
+      var author = '—';
+      if (c.expand && c.expand.author && c.expand.author.name) {
+        author = String(c.expand.author.name).trim() || '—';
+      }
+      var createdAt = Date.parse(c.created || '');
+      if (isNaN(createdAt)) createdAt = Date.now();
+      var likes = netMap[c.id];
+      if (typeof likes !== 'number') likes = 0;
+      comments.push({
+        id: String(c.id),
+        parentId: c.parentId ? String(c.parentId) : null,
+        author: author,
+        body: body,
+        createdAt: createdAt,
+        likes: likes,
+        url: fullUrl.split('#')[0] + '#comment-' + c.id
+      });
+    }
+    comments.sort(function (a, b) { return a.createdAt - b.createdAt; });
+    if (!total) total = comments.length;
+    return { count: total, comments: comments };
+  },
+
+  postComment: async function () {
+    throw new Error('التعليق يتطلب تسجيل الدخول في كول نوفيل');
+  },
+
+  voteComment: async function () {
+    throw new Error('التصويت يتطلب تسجيل الدخول في كول نوفيل');
   }
 });

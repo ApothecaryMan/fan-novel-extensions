@@ -27,15 +27,15 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:kolnovel'));
   it('has correct name', () => expect(ext.name).toBe('كول نوفيل'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.5.4'));
-  it('has apiVersion 1', () => expect(ext.apiVersion).toBe(1));
+  it('has correct version', () => expect(ext.version).toBe('1.6.0'));
+  it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://kolnovel.com'));
 
   it('exposes all required methods', () => {
     const required = [
       'parseNovelInfo', 'parseChapterList', 'parseChapterContent',
       'searchNovels', 'getPopularNovels', 'getCategories', 'getCategoryNovels',
-      'fetchLatestChapters',
+      'fetchLatestChapters', 'getComments', 'postComment', 'voteComment',
     ];
     for (const m of required) {
       expect(typeof ext[m]).toBe('function');
@@ -925,5 +925,95 @@ describe('Caching', () => {
     await ext.parseNovelInfo('/unique-cache-x/', ctx);
     await ext.parseNovelInfo('/unique-cache-y/', ctx);
     expect(fetchCount).toBe(2);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────
+// 20. Chapter comments (cmtapi PocketBase backend)
+// ──────────────────────────────────────────────────────────────────
+describe('getComments', () => {
+  const CHAPTER_HTML = '<div class="cmt commentx"><script type="module" src="https://cmtapi.kolnovel.com/embed/comments/kol-comments.js"></script>' +
+    '<kol-comments slug="test-280" entity-title="رواية تجريبية 280" ' +
+    'entity-url="https://kolnovel.com/ch-test-291266/" entity-id="291266" ' +
+    'entity-type="post" series-id="278547"></kol-comments></div>';
+
+  const ENSURE = JSON.stringify({
+    id: 'pbentity1', commentsCount: 2, allowReplies: true,
+    isLocked: false, isArchived: false
+  });
+
+  const lexBody = (text) => JSON.stringify({
+    root: {
+      children: [{ children: [{ detail: 0, format: 0, mode: 'normal', style: '', text: text, type: 'text', version: 1 }], direction: null, format: '', indent: 0, type: 'paragraph', version: 1 }],
+      direction: null, format: '', indent: 0, type: 'root', version: 1
+    }
+  });
+
+  const COMMENTS_PAGE = JSON.stringify({
+    items: [
+      { id: 'c1', parentId: '', text: lexBody('شكرا علي الترجمة'), normalizedContent: 'شكرا علي الترجمة', created: '2026-09-15T14:34:54.770Z', containsSpoiler: false, isDeleted: false, expand: { author: { name: 'اسامه وائل' } } },
+      { id: 'c2', parentId: 'c1', text: lexBody('عفوا'), normalizedContent: 'عفوا', created: '2026-09-15T15:00:00.000Z', containsSpoiler: false, isDeleted: false, expand: { author: { name: 'المترجم' } } }
+    ],
+    page: 1, perPage: 100, totalItems: 2, totalPages: 1
+  });
+
+  const NET_PAGE = JSON.stringify({
+    items: [
+      { comment: 'c1', id: 'c1', likes: 3, dislikes: 1, net: 2 },
+      { comment: 'c2', id: 'c2', likes: 0, dislikes: 0, net: 0 }
+    ],
+    page: 1, perPage: 100, totalItems: 2, totalPages: 1
+  });
+
+  const commentCtx = () => mockCtx({
+    'ch-test-291266/': ok(CHAPTER_HTML),
+    'entities/ensure': (url, init) => {
+      expect(String(init.body)).toContain('291266');
+      return ok(ENSURE);
+    },
+    'collections/comments/records': ok(COMMENTS_PAGE),
+    'collections/comment_net/records': ok(NET_PAGE)
+  });
+
+  it('resolves entity via ensure and returns threaded comments with net likes', async () => {
+    const res = await ext.getComments('https://kolnovel.com/ch-test-291266/', commentCtx());
+    expect(res.count).toBe(2);
+    expect(res.comments.length).toBe(2);
+    expect(res.comments[0].id).toBe('c1');
+    expect(res.comments[0].author).toBe('اسامه وائل');
+    expect(res.comments[0].body).toContain('شكرا علي الترجمة');
+    expect(res.comments[0].likes).toBe(2);
+    expect(res.comments[0].parentId).toBeNull();
+    expect(res.comments[1].parentId).toBe('c1');
+    expect(res.comments[1].url).toContain('#comment-c2');
+  });
+
+  it('returns empty list when chapter has no comment tag', async () => {
+    const ctx = mockCtx({ 'no-comments/': ok('<html><body>no tag</body></html>') });
+    const res = await ext.getComments('https://kolnovel.com/no-comments/', ctx);
+    expect(res).toEqual({ count: 0, comments: [] });
+  });
+
+  it('falls back to normalizedContent when Lexical parse fails', async () => {
+    const badLex = JSON.stringify({
+      items: [{ id: 'c9', parentId: '', text: 'not-json{{{', normalizedContent: 'نص بديل', created: '2026-09-15T14:00:00.000Z', isDeleted: false, expand: { author: { name: 'قارئ' } } }],
+      page: 1, perPage: 100, totalItems: 1, totalPages: 1
+    });
+    const ctx = mockCtx({
+      'ch-test-291266/': ok(CHAPTER_HTML),
+      'entities/ensure': ok(ENSURE),
+      'collections/comments/records': ok(badLex),
+      'collections/comment_net/records': ok(JSON.stringify({ items: [], page: 1, perPage: 100, totalItems: 0, totalPages: 1 }))
+    });
+    const res = await ext.getComments('https://kolnovel.com/ch-test-291266/', ctx);
+    expect(res.comments.length).toBe(1);
+    expect(res.comments[0].body).toBe('نص بديل');
+    expect(res.comments[0].likes).toBe(0);
+  });
+
+  it('postComment and voteComment require login', async () => {
+    const ctx = mockCtx();
+    await expect(ext.postComment('https://kolnovel.com/ch-test-291266/', { body: 'x' }, ctx)).rejects.toThrow('تسجيل الدخول');
+    await expect(ext.voteComment('https://kolnovel.com/ch-test-291266/', { commentId: 'c1', vote: 1 }, ctx)).rejects.toThrow('تسجيل الدخول');
   });
 });

@@ -61,7 +61,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.10.1',
+  version: '1.10.2',
   apiVersion: 2,
   baseUrl: 'https://cenele.com',
 
@@ -173,7 +173,12 @@ registerExtension({
     if (relMs) {
       if (str.indexOf('منذ') !== -1) {
         var m = str.match(/(\d+)/);
-        return now - relMs * (m ? parseInt(m[1], 10) : 1);
+        if (m) return now - relMs * parseInt(m[1], 10);
+        // Dual form without digits ("منذ ساعتين"): two units.
+        if (/تين\b|تان\b|تين\s|ساعتين|يومين|أسبوعين|اسبوعين|شهرين|سنتين|عامين|دقيقتين/.test(str)) {
+          return now - relMs * 2;
+        }
+        return now - relMs;
       }
     }
 
@@ -914,7 +919,24 @@ registerExtension({
     var author = authorM ? this._decodeEntities(this._stripTags(authorM[1])).trim() : '';
     if (!author) author = '—';
     var timeM = html.match(new RegExp('class="[^"]*' + p + '__time[^"]*"[^>]*>([\\s\\S]*?)<\\/', 'i'));
-    var createdAt = timeM ? this._parseDate(this._decodeEntities(this._stripTags(timeM[1])).trim()) : NaN;
+    // Prefer a machine timestamp when the element carries one, otherwise
+    // parse the visible text (relative "منذ…", Arabic absolute, ISO).
+    var attrM = html.match(/<[^>]*class="[^"]*__time[^"]*"[^>]*>/i);
+    var createdAt = NaN;
+    if (attrM) {
+      var dtM = attrM[0].match(/datetime="([^"]+)"/i);
+      if (dtM) createdAt = Date.parse(dtM[1]);
+      if (isNaN(createdAt)) {
+        var tsM = attrM[0].match(/data-(?:timestamp|time|created)="(\d+)"/i);
+        if (tsM) {
+          var ts = parseInt(tsM[1], 10);
+          createdAt = ts < 10000000000 ? ts * 1000 : ts;
+        }
+      }
+    }
+    if (isNaN(createdAt) && timeM) {
+      createdAt = this._parseDate(this._decodeEntities(this._stripTags(timeM[1])).trim());
+    }
     if (typeof createdAt !== 'number' || isNaN(createdAt)) createdAt = Date.now();
     var textM = html.match(new RegExp('class="[^"]*' + p + '__text[^"]*"[^>]*>([\\s\\S]*?)<\\/div>', 'i'));
     var bodyHtml = textM ? textM[1] : '';

@@ -58,7 +58,7 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:cenele'));
   it('has correct name', () => expect(ext.name).toBe('فضاء الروايات'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.10.1'));
+  it('has correct version', () => expect(ext.version).toBe('1.10.2'));
   it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://cenele.com'));
 
@@ -553,6 +553,33 @@ describe('getComments (RSP)', () => {
     const ctx = mockCtx({ 'no-rspc/': ok('<html><body>no comments here</body></html>') });
     const res = await ext.getComments('https://cenele.com/no-rspc/', ctx);
     expect(res).toEqual({ count: 0, comments: [] });
+  });
+
+  it('prefers machine timestamps and parses dual relative forms', async () => {
+    const html =
+      '<div class="rspc-comment" data-id="201">' +
+      '<span class="rspc-comment__author">قارئ</span>' +
+      '<time class="rspc-comment__time" datetime="2026-08-20T10:00:00+03:00">20 أغسطس 2026</time>' +
+      '<div class="rspc-comment__text"><p>بتوقيت</p></div></div>' +
+      '<div class="rspc-comment" data-id="202">' +
+      '<span class="rspc-comment__author">قارئ2</span>' +
+      '<span class="rspc-comment__time">منذ ساعتين</span>' +
+      '<div class="rspc-comment__text"><p>مثنى</p></div></div>';
+    const ctx = mockCtx({
+      'ch-time/': ok(
+        '<div class="rspc-wrap" data-entity-key="chapter:1:x"></div>' +
+        '<script>var RSPC = {"ajaxUrl":"https://cenele.com/wp-admin/admin-ajax.php","nonce":"abc123"}</script>'
+      ),
+      'admin-ajax.php': ok(JSON.stringify({
+        success: true, data: { html, total: 2, newOffset: 2, hasMore: false }
+      }))
+    });
+    const res = await ext.getComments('https://cenele.com/ch-time/', ctx);
+    const iso = res.comments.find((c) => c.id === '201');
+    expect(iso.createdAt).toBe(Date.parse('2026-08-20T10:00:00+03:00'));
+    const dual = res.comments.find((c) => c.id === '202');
+    const expected = Date.now() - 2 * 3600 * 1000;
+    expect(Math.abs(dual.createdAt - expected)).toBeLessThan(5 * 60 * 1000);
   });
 
   it('postComment and voteComment require login', async () => {

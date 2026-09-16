@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1789586227278,
+  "generatedAt": 1789586570576,
   "extensions": [
     {
       "id": "site:cenele",
@@ -70,7 +70,8 @@
       "size": 21189,
       "sha256": "1e1af0fdfd3dc5f88a2c88dc9db45c8cf1a0bd6b6fd5e7f388ecad39b8d8b7d2",
       "url": "site.wikisource.js",
-      "baseUrl": "https://ar.wikisource.org"
+      "baseUrl": "https://ar.wikisource.org",
+      "icon": "icons/wikisource.png"
     },
     {
       "id": "site:wuxiaworld",
@@ -85,5 +86,5 @@
       "icon": "icons/wuxiaworld.png"
     }
   ],
-  "signature": "A7qJ5ijdajjR4-YEBafelh3auRYjWafPq0cN9uR5SbnWv0MKxDDJoJJnksCVzUvdZIlCVg3ycrlULIucrekRDg"
+  "signature": "-8IMiDBwLzCXggJYiQm55qDY1u7lzRKMgESxs08hP11I6OT_xhJDoN_STEnk5LtGfUYYBOS6r-endclT4FDQDw"
 }

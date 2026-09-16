@@ -1,6 +1,6 @@
 // @id       site:wikisource
 // @name     ويكي مصدر
-// @version  1.0.0
+// @version  1.0.1
 // @lang     ar
 // @apiVersion 1
 // @baseUrl  https://ar.wikisource.org
@@ -58,7 +58,7 @@ registerExtension({
   id: 'site:wikisource',
   name: 'ويكي مصدر',
   lang: 'ar',
-  version: '1.0.0',
+  version: '1.0.1',
   apiVersion: 1,
   baseUrl: 'https://ar.wikisource.org',
 

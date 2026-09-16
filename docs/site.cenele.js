@@ -61,7 +61,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.9.5',
+  version: '1.9.6',
   apiVersion: 1,
   baseUrl: 'https://cenele.com',
 
@@ -513,10 +513,20 @@ registerExtension({
         if (rating > 5) rating = 5;
       }
     }
-    var countMatch = html.match(/<span[^>]*class="[^"]*nhv-simple-rating__count[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
+    var countMatch = html.match(/المشاهدات<\/span>\s*<strong>([^<]+)<\/strong>/i);
     if (countMatch) {
-      var countNum = this._toLatinDigits(this._stripTags(countMatch[1])).replace(/[^\d]/g, '');
-      if (countNum) readersCount = countNum;
+      var rawViews = this._toLatinDigits(this._stripTags(countMatch[1]).trim());
+      var km = rawViews.match(/^([\d.]+)\s*([kKmM])$/);
+      if (km) {
+        var base = parseFloat(km[1]);
+        if (!isNaN(base)) {
+          var mult = km[2].toLowerCase() === 'm' ? 1000000 : 1000;
+          readersCount = String(Math.round(base * mult));
+        }
+      } else {
+        var countNum = rawViews.replace(/[^\d]/g, '');
+        if (countNum) readersCount = countNum;
+      }
     }
 
     return {

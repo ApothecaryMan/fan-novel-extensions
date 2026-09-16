@@ -58,7 +58,7 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:cenele'));
   it('has correct name', () => expect(ext.name).toBe('فضاء الروايات'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.9.5'));
+  it('has correct version', () => expect(ext.version).toBe('1.9.6'));
   it('has apiVersion 1', () => expect(ext.apiVersion).toBe(1));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://cenele.com'));
 
@@ -202,6 +202,11 @@ describe('parseNovelInfo (real novel page)', () => {
     expect(info.status).toBe('مستمرة');
     expect(info.summary).toBeTruthy();
     expect(info.summary.length).toBeGreaterThan(20);
+  });
+  it('extracts TRUE total views (المشاهدات), not rating count', async () => {
+    const info = await ext.parseNovelInfo(REAL_NOVEL_URL, ctx);
+    // Real page: <span>المشاهدات</span><strong>114٬616</strong>, rating count is only 407.
+    expect(info.readersCount).toBe('114616');
   });
   it('throws on HTTP error', async () => {
     const bad = mockCtx({ '/nope': { ok: false, status: 404, text: '' } });

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1789582866329,
+  "generatedAt": 1789586227278,
   "extensions": [
     {
       "id": "site:cenele",
@@ -62,6 +62,17 @@
       "baseUrl": "https://truthnovel.top"
     },
     {
+      "id": "site:wikisource",
+      "name": "ويكي مصدر",
+      "lang": "ar",
+      "version": "1.0.0",
+      "apiVersion": 1,
+      "size": 21189,
+      "sha256": "1e1af0fdfd3dc5f88a2c88dc9db45c8cf1a0bd6b6fd5e7f388ecad39b8d8b7d2",
+      "url": "site.wikisource.js",
+      "baseUrl": "https://ar.wikisource.org"
+    },
+    {
       "id": "site:wuxiaworld",
       "name": "WuxiaWorld",
       "lang": "en",
@@ -74,5 +85,5 @@
       "icon": "icons/wuxiaworld.png"
     }
   ],
-  "signature": "UE4EXJhc7daqfF0wHbHIQa8bvlqpWBxGEGuMz-fn6aVwUENozIOBmOM4N57lXYtQA1WqrHgBeaJ-AjZ1Ihp-BQ"
+  "signature": "A7qJ5ijdajjR4-YEBafelh3auRYjWafPq0cN9uR5SbnWv0MKxDDJoJJnksCVzUvdZIlCVg3ycrlULIucrekRDg"
 }

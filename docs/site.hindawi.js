@@ -1,6 +1,6 @@
 // @id       site:hindawi
 // @name     مؤسسة هنداوي
-// @version  1.1.1
+// @version  1.1.2
 // @lang     ar
 // @apiVersion 1
 // @baseUrl  https://www.safahat.org
@@ -54,7 +54,7 @@ registerExtension({
   id: 'site:hindawi',
   name: 'مؤسسة هنداوي',
   lang: 'ar',
-  version: '1.1.1',
+  version: '1.1.2',
   apiVersion: 1,
   baseUrl: 'https://www.safahat.org',
 
@@ -135,6 +135,61 @@ registerExtension({
       return 'https://downloads.hindawi.org/covers/304x406/' + m[1] + '.jpg';
     }
     return this._absUrl(urlOrId);
+  },
+
+  _extractBalancedInner: function (html, openTagRegex) {
+    if (!html) return null;
+    openTagRegex.lastIndex = 0;
+    var open = openTagRegex.exec(html);
+    if (!open) return null;
+    var startInner = open.index + open[0].length;
+    var tagRe = /<\/?div\b[^>]*>/gi;
+    tagRe.lastIndex = startInner;
+    var depth = 1;
+    var m;
+    while ((m = tagRe.exec(html)) !== null) {
+      if (m[0].charAt(1) === '/') {
+        depth -= 1;
+      } else {
+        depth += 1;
+      }
+      if (depth === 0) {
+        return html.substring(startInner, m.index);
+      }
+    }
+    return null;
+  },
+
+  _extractBookIndex: function (html) {
+    if (!html) return null;
+    var inner = this._extractBalancedInner(html, /<div[^>]*class="[^"]*bookIndex[^"]*"[^>]*>/gi);
+    if (inner !== null) return inner;
+    var m = html.match(/<div[^>]*class="[^"]*bookIndex[^"]*"[^>]*>([\s\S]*?<\/ul>[\s\S]*?)<\/div>/i);
+    if (m) return m[1];
+    var legacy = html.match(/<div[^>]*class="[^"]*bookIndex[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+    return legacy ? legacy[1] : null;
+  },
+
+  _extractChapterContent: function (html) {
+    if (!html) return null;
+    var am = html.match(/<article[^>]*class="[^"]*chapterContent[^"]*"[^>]*>([\s\S]*?)<\/article>/i);
+    if (am) return am[1];
+    return this._extractBalancedInner(html, /<div[^>]*class="[^"]*chapterContent[^"]*"[^>]*>/gi);
+  },
+
+  _cleanInline: function (html) {
+    if (!html) return '';
+    var s = String(html).replace(/<br\s*\/?>/gi, '\n');
+    s = s.replace(/<\/(?:li|tr|ul|ol)>/gi, '\n');
+    s = s.replace(/<[^>]+>/g, ' ');
+    s = this._decodeEntities(s);
+    var lines = s.split('\n');
+    var out = [];
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].replace(/\s+/g, ' ').trim();
+      if (line) out.push(line);
+    }
+    return out.join('\n');
   },
 
   // ---------------------------------------------------------------
@@ -221,9 +276,9 @@ registerExtension({
 
     // 6. Chapters count
     var totalChapters = 0;
-    var indexBlockMatch = html.match(/<div[^>]*class="[^"]*bookIndex[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
-    if (indexBlockMatch) {
-      var chMatches = indexBlockMatch[1].match(/<a[^>]+href="[^"]*"[^>]*>/gi);
+    var indexInner = this._extractBookIndex(html);
+    if (indexInner) {
+      var chMatches = indexInner.match(/<a[^>]+href="[^"]*"[^>]*>/gi);
       if (chMatches) totalChapters = chMatches.length;
     }
 
@@ -256,12 +311,12 @@ registerExtension({
     var html = res.text;
     var chapters = [];
 
-    var indexBlockMatch = html.match(/<div[^>]*class="[^"]*bookIndex[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
-    if (indexBlockMatch) {
+    var indexBlockInner = this._extractBookIndex(html);
+    if (indexBlockInner) {
       var chRegex = /<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
       var cm;
       var num = 1;
-      while ((cm = chRegex.exec(indexBlockMatch[1])) !== null) {
+      while ((cm = chRegex.exec(indexBlockInner)) !== null) {
         var chUrl = this._absUrl(cm[1]);
         var rawTitle = this._decodeEntities(this._stripTags(cm[2])).trim();
         chapters.push({
@@ -295,33 +350,29 @@ registerExtension({
     }
     var html = res.text;
 
-    var articleMatch = html.match(/<article[^>]*class="[^"]*chapterContent[^"]*"[^>]*>([\s\S]*?)<\/article>/i);
-    if (!articleMatch) {
-      articleMatch = html.match(/<div[^>]*class="[^"]*chapterContent[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
-    }
-    if (!articleMatch) {
+    var content = this._extractChapterContent(html);
+    if (!content) {
       throw new Error('لم يتم العثور على نص الفصل');
     }
-
-    var content = articleMatch[1];
     // Remove scripts, styles, download buttons, navigations
     content = content.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
     content = content.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
     content = content.replace(/<div[^>]*class="[^"]*(?:download-icons|shareActions|pages)[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '');
 
-    // Extract all paragraphs and headers in order
+    // Extract all paragraphs and headers in order (preserve <br/> verse breaks)
     var paragraphs = [];
     var pRegex = /<(?:p|h1|h2|h3|h4|h5|h6)[^>]*>([\s\S]*?)<\/(?:p|h1|h2|h3|h4|h5|h6)>/gi;
     var pm;
     while ((pm = pRegex.exec(content)) !== null) {
-      var text = this._decodeEntities(this._stripTags(pm[1])).trim();
+      var text = this._cleanInline(pm[1]).trim();
       if (!text) continue;
       // Skip duplicate book-wide titles repeating at the start if it matches standard title
       paragraphs.push(text);
     }
 
     if (paragraphs.length === 0) {
-      return this._decodeEntities(this._stripTags(content)).replace(/\n\s*\n/g, '\n\n').trim();
+      var fallback = String(content).replace(/<br\s*\/?>/gi, '\n');
+      return this._decodeEntities(this._stripTags(fallback)).replace(/\n\s*\n/g, '\n\n').trim();
     }
 
     return paragraphs.join('\n\n');

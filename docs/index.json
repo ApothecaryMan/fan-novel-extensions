@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1789586570576,
+  "generatedAt": 1789588273592,
   "extensions": [
     {
       "id": "site:cenele",
@@ -51,6 +51,17 @@
       "icon": "icons/novelfull.png"
     },
     {
+      "id": "site:shamela",
+      "name": "المكتبة الشاملة",
+      "lang": "ar",
+      "version": "1.0.0",
+      "apiVersion": 1,
+      "size": 18178,
+      "sha256": "784383f4fa001f049358d0ff96ea0f9a1ab3387503a0a142f7df987e24c1bed2",
+      "url": "site.shamela.js",
+      "baseUrl": "https://shamela.ws"
+    },
+    {
       "id": "site:truthnovel",
       "name": "رواية سيد الحقيقة",
       "lang": "ar",
@@ -86,5 +97,5 @@
       "icon": "icons/wuxiaworld.png"
     }
   ],
-  "signature": "-8IMiDBwLzCXggJYiQm55qDY1u7lzRKMgESxs08hP11I6OT_xhJDoN_STEnk5LtGfUYYBOS6r-endclT4FDQDw"
+  "signature": "gHYiGCD6SC6heEwB-vdCOfvdYINsNP5Rc8uJ1Ygg3CmiEWfsJE19KRpCdvM2svgGhJAd01QjXGlYU8achEDhDA"
 }

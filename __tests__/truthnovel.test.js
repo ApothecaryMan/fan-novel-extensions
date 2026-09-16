@@ -46,7 +46,7 @@ describe("site:truthnovel extension", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.1.8");
+    expect(ext.version).toBe("1.1.9");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -252,5 +252,52 @@ describe("site:truthnovel extension", () => {
     expect(res.comments[0].chapterTitle).toBe("2432 -قرار روبين");
     expect(res.comments[0].chapterUrl).toBe("https://truthnovel.top/2432-decision/");
     expect(res.comments[0].body).toBe("تعليق تجريبي رائع …");
+  });
+
+  it("prefers RSS feed exact times over homepage day-level dates", async () => {
+    const list = `
+<div id="w4pl-inner-257" class="w4pl-inner"><ul>
+<li><a class="post_title w4pl_post_title" href="https://truthnovel.top/2444-x/">2444 -التفاوض مع طاغوت</a></li>
+<li><a class="post_title w4pl_post_title" href="https://truthnovel.top/2445-x/">2445 -عرض للطاغوت</a></li>
+<li><a class="post_title w4pl_post_title" href="https://truthnovel.top/1-genius/" title="View 1 -عبقري">1 -عبقري</a></li>
+</ul></div>`;
+    const home = `
+<div class="bs-blog-post">
+<h4 class="title"><a href="https://truthnovel.top/2445-x/">2445 -عرض للطاغوت</a></h4>
+<div class="bs-blog-meta"><span class="bs-blog-date"><a href="https://truthnovel.top/2026/09/"><time datetime="">16 سبتمبر، 2026</time></a></span></div>
+</div>
+<div class="bs-blog-post">
+<h4 class="title"><a href="https://truthnovel.top/2444-x/">2444 -التفاوض مع طاغوت</a></h4>
+<div class="bs-blog-meta"><span class="bs-blog-date"><a href="https://truthnovel.top/2026/09/"><time datetime="">16 سبتمبر، 2026</time></a></span></div>
+</div>`;
+    const feed = `<?xml version="1.0"?><rss><channel>
+<item><title>2444 -التفاوض مع طاغوت</title><link>https://truthnovel.top/2444-x/</link><pubDate>Wed, 16 Sep 2026 13:02:07 +0000</pubDate></item>
+<item><title>2445 -عرض للطاغوت</title><link>https://truthnovel.top/2445-x/</link><pubDate>Wed, 16 Sep 2026 19:15:57 +0000</pubDate></item>
+</channel></rss>`;
+    const ctx = mockCtx({
+      "?w4pl=257": ok(list),
+      "/feed/": ok(feed),
+      "https://truthnovel.top/": ok(home)
+    });
+    const fresh = loadExtension("site.truthnovel.js");
+    const chapters = await fresh.parseChapterList("https://truthnovel.top/?w4pl=257", ctx);
+    const c44 = chapters.find((c) => c.number === 2444);
+    const c45 = chapters.find((c) => c.number === 2445);
+    const c1 = chapters.find((c) => c.number === 1);
+    expect(c44.uploadedAt).toBe(Date.parse("Wed, 16 Sep 2026 13:02:07 +0000"));
+    expect(c45.uploadedAt).toBe(Date.parse("Wed, 16 Sep 2026 19:15:57 +0000"));
+    expect(c45.uploadedAt).toBeGreaterThan(c44.uploadedAt);
+    // Old chapter must not be stamped as today
+    expect(c1.uploadedAt).toBeLessThan(c44.uploadedAt);
+  });
+
+  it("parses Arabic relative times", async () => {
+    const now = Date.now();
+    const sixH = ext._parseDate("منذ 6 ساعات", now);
+    expect(sixH).toBeGreaterThan(now - 6 * 60 * 60 * 1000 - 60000);
+    expect(sixH).toBeLessThanOrEqual(now);
+    const tenM = ext._parseDate("منذ 10 دقائق", now);
+    expect(tenM).toBeGreaterThan(now - 10 * 60 * 1000 - 60000);
+    expect(tenM).toBeLessThanOrEqual(now);
   });
 });

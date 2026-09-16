@@ -25,7 +25,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.1.8",
+  version: "1.1.9",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -95,14 +95,53 @@ registerExtension({
       .replace(/[\u06F0-\u06F9]/g, function (d) { return String(d.charCodeAt(0) - 0x6F0); });
   },
 
-  _parseDate: function (raw) {
+  _normUrl: function (url) {
+    if (!url) return "";
+    var u = this._absUrl(url).trim();
+    u = u.replace(/\/+$/, "");
+    try { u = decodeURI(u); } catch (e) { /* keep encoded */ }
+    return u;
+  },
+
+  _parseDate: function (raw, nowMs) {
     if (!raw) return undefined;
     var str = this._toLatinDigits(String(raw).trim());
     if (!str) return undefined;
+    var now = (typeof nowMs === "number" && nowMs > 0) ? nowMs : Date.now();
 
     if (/^\d{4}-\d{2}-\d{2}/.test(str)) {
       var t = Date.parse(str);
       if (!isNaN(t)) return t;
+    }
+
+    // Relative Arabic times: "منذ 6 ساعات", "قبل ساعتين", "منذ 10 دقائق", ...
+    var rel = str.replace(/،/g, " ");
+    var dualUnit = null;
+    if (/ساعتين/.test(rel)) dualUnit = "hours2";
+    else if (/دقيقتين/.test(rel)) dualUnit = "minutes2";
+    else if (/يومين/.test(rel)) dualUnit = "days2";
+    else if (/أسبوعين|اسبوعين/.test(rel)) dualUnit = "weeks2";
+    else if (/شهرين/.test(rel)) dualUnit = "months2";
+    else if (/سنتين|عامين/.test(rel)) dualUnit = "years2";
+    var mNum = rel.match(/(\d+)\s*(?:من\s*)?(?:ثاني|ثانية|ثواني|دقيق|دقيقة|دقائق|ساع|ساعة|ساعات|يوم|أيام|ايام|أسبوع|اسبوع|أسابيع|اسابيع|شهر|شهور|أشهر|اشهر|سنة|سنوات|عام|أعوام|اعوام)/);
+    // Also handle "منذ X" / "قبل X" without unit repetition issues
+    if (!mNum) mNum = rel.match(/(\d+)/);
+    if (/(منذ|قبل|من\s*قبل)\s/.test(rel) || /^(منذ|قبل)/.test(rel) || dualUnit) {
+      var amount = dualUnit ? 2 : (mNum ? parseInt(mNum[1], 10) : NaN);
+      if (!isNaN(amount)) {
+        var delta = 0;
+        if (/ثان/.test(rel)) delta = amount * 1000;
+        else if (/دقيق|دقائق|دقيقة/.test(rel) || dualUnit === "minutes2") delta = amount * 60 * 1000;
+        else if (/ساع/.test(rel) || dualUnit === "hours2") delta = amount * 60 * 60 * 1000;
+        else if (/يوم|أيام|ايام/.test(rel) || dualUnit === "days2") delta = amount * 24 * 60 * 60 * 1000;
+        else if (/أسبوع|اسبوع/.test(rel) || dualUnit === "weeks2") delta = amount * 7 * 24 * 60 * 60 * 1000;
+        else if (/شهر|شهور|أشهر|اشهر/.test(rel) || dualUnit === "months2") delta = amount * 30 * 24 * 60 * 60 * 1000;
+        else if (/سنة|سنوات|عام|أعوام|اعوام/.test(rel) || dualUnit === "years2") delta = amount * 365 * 24 * 60 * 60 * 1000;
+        else delta = 0;
+        if (delta > 0) return now - delta;
+      } else if (/الآن|الان|just now/i.test(rel)) {
+        return now;
+      }
     }
 
     var arabicMonths = {
@@ -121,8 +160,20 @@ registerExtension({
           var year = parseInt(nums[1], 10);
           if (day > 1000) { var tmp = day; day = year; year = tmp; }
           if (year < 100) year += 2000;
-          var dateObj = new Date(Date.UTC(year, monthIdx, day, 12, 0, 0));
-          if (!isNaN(dateObj.getTime())) return dateObj.getTime();
+          // Optional time-of-day "HH:mm" after the date, e.g. "16 سبتمبر 2026 19:15"
+          var hh = 12, mm = 0, hasTime = false;
+          var tm = str.match(/(\d{1,2}):(\d{2})/);
+          if (tm) {
+            var th = parseInt(tm[1], 10), tmi = parseInt(tm[2], 10);
+            if (th >= 0 && th <= 23 && tmi >= 0 && tmi <= 59) { hh = th; mm = tmi; hasTime = true; }
+          }
+          // Day-only dates keep noon UTC to avoid timezone day-shift;
+          // dates with explicit time use it as UTC.
+          var dateObj = new Date(Date.UTC(year, monthIdx, day, hh, mm, 0));
+          if (!isNaN(dateObj.getTime())) {
+            if (!hasTime) return dateObj.getTime();
+            return dateObj.getTime();
+          }
         }
       }
     }
@@ -207,18 +258,30 @@ registerExtension({
     });
 
     // Populate uploadedAt
-    var homeDateMap = {};
+    // 1) Homepage gives day-level dates (no time). 2) RSS feed gives
+    // exact pubDate per recent chapter. Feed wins when both exist.
+    var self = this;
+    var dateMap = {};
+    var feedMap = {};
+    var feedNums = {};
     try {
       var homeRes = await _fetchCachedPage(this._absUrl("/"), ctx);
       if (homeRes && homeRes.ok && homeRes.text) {
-        var itemRegex = /<h4[^>]*class="title"[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<span[^>]*class="bs-blog-date"[^>]*>[\s\S]*?<time[^>]*>([\s\S]*?)<\/time>/gi;
+        var itemRegex = /<h4[^>]*class="title"[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<span[^>]*class="bs-blog-date"[^>]*>[\s\S]*?<time([^>]*)>([\s\S]*?)<\/time>/gi;
         var im;
         while ((im = itemRegex.exec(homeRes.text)) !== null) {
           var itemUrl = this._absUrl(im[1].trim());
-          var dateStr = this._stripTags(im[3]).trim();
-          var ts = this._parseDate(dateStr);
+          var timeAttrs = im[3] || "";
+          var dateText = this._stripTags(im[4]).trim();
+          var ts = undefined;
+          var dtm = timeAttrs.match(/datetime\s*=\s*"([^"]*)"/i);
+          if (dtm && dtm[1]) {
+            var isoTs = this._parseDate(dtm[1].trim());
+            if (isoTs) ts = isoTs;
+          }
+          if (!ts) ts = this._parseDate(dateText);
           if (ts) {
-            homeDateMap[itemUrl] = ts;
+            dateMap[self._normUrl(itemUrl)] = ts;
           }
         }
       }
@@ -226,24 +289,74 @@ registerExtension({
       // Non-fatal if homepage fails
     }
 
+    try {
+      var feedRes = await _fetchCachedPage(this._absUrl("/feed/"), ctx);
+      if (feedRes && feedRes.ok && feedRes.text) {
+        var fItemRe = /<item>([\s\S]*?)<\/item>/gi;
+        var fm;
+        while ((fm = fItemRe.exec(feedRes.text)) !== null) {
+          var block = fm[1];
+          var linkM = block.match(/<link>([\s\S]*?)<\/link>/i);
+          var dateM = block.match(/<pubDate>([\s\S]*?)<\/pubDate>/i);
+          var titleM = block.match(/<title>([\s\S]*?)<\/title>/i);
+          if (!linkM || !dateM) continue;
+          var fUrl = linkM[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").trim();
+          var fTs = Date.parse(dateM[1].trim());
+          if (isNaN(fTs)) continue;
+          var norm = self._normUrl(fUrl);
+          feedMap[norm] = fTs;
+          dateMap[norm] = fTs;
+          if (titleM) {
+            var fTitle = self._toLatinDigits(self._stripTags(titleM[1]));
+            var fNumM = fTitle.match(/(\d+)/);
+            if (fNumM) feedNums[norm] = parseInt(fNumM[1], 10);
+          }
+        }
+      }
+    } catch (e2) {
+      // Non-fatal if feed fails
+    }
+
     var startTs = 1708473600000; // 21 Feb 2024 (website launch)
     var latestTs = 0;
-    for (var k in homeDateMap) {
-      if (homeDateMap[k] > latestTs) latestTs = homeDateMap[k];
+    for (var k in dateMap) {
+      if (dateMap[k] > latestTs) latestTs = dateMap[k];
     }
     if (!latestTs) latestTs = Date.now();
 
+    // Old chapters without exact dates interpolate below the oldest
+    // exact feed date, so they never show as "today".
+    var oldestFeedTs = 0;
+    var oldestFeedNum = 0;
+    for (var fk in feedMap) {
+      if (!oldestFeedTs || feedMap[fk] < oldestFeedTs) oldestFeedTs = feedMap[fk];
+    }
+    for (var fn in feedNums) {
+      if (!oldestFeedNum || feedNums[fn] < oldestFeedNum) oldestFeedNum = feedNums[fn];
+    }
+    var interpEnd = oldestFeedTs ? oldestFeedTs - 60000 : latestTs;
+    if (interpEnd < startTs) interpEnd = latestTs;
+
     var maxChapterNum = chapters.length > 0 ? (chapters[chapters.length - 1].number || chapters.length) : 1;
+    var interpMaxNum = oldestFeedNum ? oldestFeedNum - 1 : maxChapterNum;
 
     for (var i = 0; i < chapters.length; i++) {
       var ch = chapters[i];
-      if (homeDateMap[ch.url]) {
-        ch.uploadedAt = homeDateMap[ch.url];
+      var normUrl = self._normUrl(ch.url);
+      if (dateMap[normUrl]) {
+        ch.uploadedAt = dateMap[normUrl];
       } else if (maxChapterNum > 1 && ch.number) {
-        var ratio = Math.max(0, Math.min(1, (ch.number - 1) / (maxChapterNum - 1)));
-        ch.uploadedAt = Math.round(startTs + ratio * (latestTs - startTs));
+        if (oldestFeedNum && ch.number >= oldestFeedNum) {
+          // Between oldest feed date and latest — should be rare since
+          // feed covers the newest items; clamp below latest.
+          ch.uploadedAt = Math.min(latestTs, interpEnd + 1);
+        } else {
+          var denom = Math.max(1, interpMaxNum - 1);
+          var ratio = Math.max(0, Math.min(1, (ch.number - 1) / denom));
+          ch.uploadedAt = Math.round(startTs + ratio * (interpEnd - startTs));
+        }
       } else {
-        ch.uploadedAt = latestTs;
+        ch.uploadedAt = interpEnd;
       }
     }
 

@@ -61,8 +61,8 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.9.6',
-  apiVersion: 1,
+  version: '1.10.0',
+  apiVersion: 2,
   baseUrl: 'https://cenele.com',
 
   // ------------------------------------------------ base helpers
@@ -745,5 +745,249 @@ registerExtension({
       });
     }
     return results;
+  },
+
+  // -------------------------------------------------- site comments (read-only, RSP)
+  // Chapter pages embed `.rspc-wrap[data-entity-key="chapter:{postId}:{slug}"]`
+  // plus `var RSPC = {ajaxUrl, nonce, ...}`. Comments are collapsed by default
+  // and load on demand: POST admin-ajax.php action=rspc_load_more
+  // {nonce, entity_key, offset, order:latest|popular} →
+  // {html, total, newOffset, hasMore}. Card levels use distinct classes:
+  // .rspc-comment[data-id] (top), .rspc-reply-item[data-id] (replies),
+  // .rspc-subreply[data-id] (nested). Votes (.rspc-like-count /
+  // .rspc-dislike-count) render counts for guests but only logged-in users
+  // may vote; guest posting exists (moderation queue) but this extension is
+  // read-only, so postComment/voteComment throw a login message.
+  _rspcProps: function (html) {
+    var wrapM = html.match(/<div[^>]*class="[^"]*rspc-wrap[^"]*"[^>]*>/i);
+    if (!wrapM) return null;
+    var keyM = wrapM[0].match(/data-entity-key="([^"]+)"/i);
+    if (!keyM) return null;
+    var regionM = html.match(/var RSPC\s*=\s*\{[\s\S]{0,1200}?"nonce"\s*:\s*"([^"]+)"/i);
+    var nonceM = regionM || html.match(/"nonce"\s*:\s*"([a-f0-9]{6,})"/i);
+    var ajaxM = html.match(/var RSPC\s*=\s*\{[\s\S]{0,1200}?"ajaxUrl"\s*:\s*"([^"]+)"/i);
+    return {
+      entityKey: keyM[1],
+      nonce: nonceM ? nonceM[1] : '',
+      ajaxUrl: ajaxM ? ajaxM[1].replace(/\\\//g, '/') : (this.baseUrl + '/wp-admin/admin-ajax.php')
+    };
+  },
+
+  // Refresh a stale RSP nonce (403 / '-1' / bad_nonce). Mutates props.
+  _rspcRefreshNonce: async function (props, ctx, referer) {
+    try {
+      var r = await this._ajaxPost(props.ajaxUrl, { action: 'rspc_refresh_nonce' }, ctx, referer);
+      var j = this._parseAjaxJson(r, null);
+      var d = (j && j.data && typeof j.data === 'object') ? j.data : null;
+      if (d && d.nonce) {
+        props.nonce = d.nonce;
+        return true;
+      }
+    } catch (e) {
+      if (ctx && ctx.log) ctx.log('warn', 'cenele: rspc nonce refresh failed');
+    }
+    return false;
+  },
+
+  // One rspc_load_more page with nonce-refresh retry. Returns the unwrapped
+  // payload {html, total, newOffset, hasMore} or null when un-fetchable.
+  _rspcLoadPage: async function (props, offset, order, ctx, referer) {
+    for (var attempt = 0; attempt < 3; attempt++) {
+      var r;
+      try {
+        r = await this._ajaxPost(props.ajaxUrl, {
+          action: 'rspc_load_more',
+          nonce: props.nonce,
+          entity_key: props.entityKey,
+          offset: String(offset),
+          order: order
+        }, ctx, referer);
+      } catch (e) {
+        if (ctx && ctx.log) ctx.log('warn', 'cenele: rspc page', offset, 'transport error:', e && e.message);
+        await _sleep(400 * (attempt + 1));
+        continue;
+      }
+      var j = this._parseAjaxJson(r, null);
+      var text = (r && typeof r.text === 'string') ? r.text.trim() : '';
+      var badNonce = r.status === 403 || text === '-1' ||
+        (j && ((j.error === 'bad_nonce') || (j.data && j.data.error === 'bad_nonce')));
+      if (badNonce) {
+        if (ctx && ctx.log) ctx.log('info', 'cenele: rspc stale nonce, refreshing');
+        if (await this._rspcRefreshNonce(props, ctx, referer)) continue;
+        return null;
+      }
+      if (!r.ok) {
+        if (ctx && ctx.log) ctx.log('warn', 'cenele: rspc page', offset, '→ HTTP', r.status);
+        await _sleep(400 * (attempt + 1));
+        continue;
+      }
+      if (!j) return null;
+      var d = (j.data && typeof j.data === 'object') ? j.data : j;
+      if (d && typeof d === 'object' && ('html' in d || 'total' in d)) return d;
+      return null;
+    }
+    return null;
+  },
+
+  // Split same-level RSP cards by exact class token + data-id. Deeper levels
+  // use different class tokens, so cutting at the next same-level open tag is
+  // safe without depth counting. Returns [{id, start, end}].
+  _rspcCardSpans: function (html, token) {
+    var spans = [];
+    var tagRe = /<div[^>]*>/gi;
+    var tm;
+    while ((tm = tagRe.exec(html)) !== null) {
+      var tag = tm[0];
+      if (tag.indexOf('data-id') === -1) continue;
+      var cls = tag.match(/class="([^"]*)"/i);
+      if (!cls) continue;
+      var toks = cls[1].split(/\s+/);
+      var hit = false;
+      for (var t = 0; t < toks.length; t++) {
+        if (toks[t] === token) { hit = true; break; }
+      }
+      if (!hit) continue;
+      var idM = tag.match(/data-id="(\d+)"/i);
+      if (idM) spans.push({ id: idM[1], start: tm.index, end: -1 });
+    }
+    for (var i = 0; i < spans.length; i++) {
+      spans[i].end = (i + 1 < spans.length) ? spans[i + 1].start : html.length;
+    }
+    return spans;
+  },
+
+  // Remove nested card spans from a block so parent field extraction never
+  // leaks reply content. Returns {html, blocks:[{id, html}]}.
+  _rspcPopNested: function (blockHtml, token) {
+    var spans = this._rspcCardSpans(blockHtml, token);
+    if (!spans.length) return { html: blockHtml, blocks: [] };
+    var out = '';
+    var pos = 0;
+    var blocks = [];
+    for (var i = 0; i < spans.length; i++) {
+      out += blockHtml.slice(pos, spans[i].start) + ' ';
+      blocks.push({ id: spans[i].id, html: blockHtml.slice(spans[i].start, spans[i].end) });
+      pos = spans[i].end;
+    }
+    out += blockHtml.slice(pos);
+    return { html: out, blocks: blocks };
+  },
+
+  // Extract one card's fields. `p` is the level prefix:
+  // 'rspc-comment' | 'rspc-reply-item' | 'rspc-subreply'.
+  _rspcNode: function (id, html, parentId, p, fullUrl) {
+    var authorM = html.match(new RegExp('class="[^"]*' + p + '__author[^"]*"[^>]*>([\\s\\S]*?)<\\/', 'i')) ||
+                  html.match(/class="[^"]*rspc-user__name[^"]*"[^>]*>([\s\S]*?)<\//i);
+    var author = authorM ? this._decodeEntities(this._stripTags(authorM[1])).trim() : '';
+    if (!author) author = '—';
+    var timeM = html.match(new RegExp('class="[^"]*' + p + '__time[^"]*"[^>]*>([\\s\\S]*?)<\\/', 'i'));
+    var createdAt = timeM ? this._parseDate(this._decodeEntities(this._stripTags(timeM[1])).trim()) : NaN;
+    if (typeof createdAt !== 'number' || isNaN(createdAt)) createdAt = Date.now();
+    var textM = html.match(new RegExp('class="[^"]*' + p + '__text[^"]*"[^>]*>([\\s\\S]*?)<\\/div>', 'i'));
+    var bodyHtml = textM ? textM[1] : '';
+    bodyHtml = bodyHtml.replace(/<div[^>]*class="[^"]*replyto[^"]*"[^>]*>[\s\S]*?<\/div>/gi, ' ');
+    var paras = [];
+    var pr = /<p[^>]*>([\s\S]*?)<\/p>/gi;
+    var pm;
+    while ((pm = pr.exec(bodyHtml)) !== null) {
+      // The "ردًا على <a href="...#comment-N">X</a>." reference line is its
+      // own paragraph — threading already shows the nesting, so drop it whole
+      // instead of leaving the bare "X ." residue behind.
+      if (/#comment-\d+/i.test(pm[1])) continue;
+      var t = this._decodeEntities(this._stripTags(pm[1])).trim();
+      if (t) paras.push(t);
+    }
+    var body = paras.length ? paras.join('\n\n') : this._decodeEntities(this._stripTags(bodyHtml)).trim();
+    if (!body) return null;
+    if (/spoiler/i.test(html)) body = '[حرق] ' + body;
+    var images = [];
+    var ir = /<img[^>]*>/gi;
+    var im;
+    while ((im = ir.exec(html)) !== null && images.length < 4) {
+      if (/avatar/i.test(im[0])) continue;
+      var sm = im[0].match(/src="([^"]+)"/i);
+      if (sm && /^https?:\/\//i.test(sm[1]) && images.indexOf(sm[1]) === -1) images.push(sm[1]);
+    }
+    var likeM = html.match(/class="[^"]*rspc-like-count[^"]*"[^>]*>([\s\S]*?)</i);
+    var likes = likeM ? parseInt(this._toLatinDigits(this._stripTags(likeM[1])), 10) : 0;
+    if (isNaN(likes) || likes < 0) likes = 0;
+    var node = {
+      id: String(id),
+      parentId: parentId ? String(parentId) : null,
+      author: author,
+      body: body,
+      createdAt: createdAt,
+      likes: likes,
+      url: fullUrl.split('#')[0] + '#comment-' + id
+    };
+    if (images.length) node.images = images;
+    return node;
+  },
+
+  // Parse one rspc_load_more HTML payload into the flat out[] list,
+  // threading replies (level 1) and sub-replies (level 2) via parentId.
+  _parseRspcPage: function (html, fullUrl, out) {
+    if (!html) return;
+    var tops = this._rspcCardSpans(html, 'rspc-comment');
+    for (var i = 0; i < tops.length; i++) {
+      var topHtml = html.slice(tops[i].start, tops[i].end);
+      var popped1 = this._rspcPopNested(topHtml, 'rspc-reply-item');
+      var node = this._rspcNode(tops[i].id, popped1.html, null, 'rspc-comment', fullUrl);
+      if (node) out.push(node);
+      for (var r = 0; r < popped1.blocks.length; r++) {
+        var rb = popped1.blocks[r];
+        var popped2 = this._rspcPopNested(rb.html, 'rspc-subreply');
+        var rnode = this._rspcNode(rb.id, popped2.html, tops[i].id, 'rspc-reply-item', fullUrl);
+        if (rnode) out.push(rnode);
+        for (var s = 0; s < popped2.blocks.length; s++) {
+          var snode = this._rspcNode(popped2.blocks[s].id, popped2.blocks[s].html, rb.id, 'rspc-subreply', fullUrl);
+          if (snode) out.push(snode);
+        }
+      }
+    }
+  },
+
+  getComments: async function (chapterUrl, ctx) {
+    var fullUrl = this._absUrl(chapterUrl);
+    var res = await this._safeFetch(fullUrl, ctx, 'فشل جلب صفحة الفصل');
+    if (!res.ok) throw new Error('فشل جلب صفحة الفصل: ' + res.status);
+    var props = this._rspcProps(res.text || '');
+    if (!props) return { count: 0, comments: [] };
+    var referer = fullUrl;
+    var first = await this._rspcLoadPage(props, 0, 'latest', ctx, referer);
+    if (!first) return { count: 0, comments: [] };
+    var total = parseInt(first.total, 10);
+    if (isNaN(total) || total < 0) total = 0;
+    var pages = [first.html || ''];
+    var offset = parseInt(first.newOffset, 10) || 0;
+    var hasMore = !!first.hasMore;
+    var guard = 0;
+    // Sequential + paced: this Madara fork throttles parallel admin-ajax
+    // bursts from one client (403s) — same rule as the chapter crawler.
+    while (hasMore && guard < 4) {
+      guard++;
+      await _sleep(250 + Math.floor(Math.random() * 250));
+      var pg = await this._rspcLoadPage(props, offset, 'latest', ctx, referer);
+      if (!pg) break;
+      pages.push(pg.html || '');
+      offset = parseInt(pg.newOffset, 10) || offset;
+      hasMore = !!pg.hasMore;
+    }
+    if (ctx && ctx.log) ctx.log('info', 'cenele: loaded', pages.length, 'comment page(s)');
+    var comments = [];
+    for (var i = 0; i < pages.length; i++) {
+      this._parseRspcPage(pages[i], fullUrl, comments);
+    }
+    comments.sort(function (a, b) { return a.createdAt - b.createdAt; });
+    if (!total) total = comments.length;
+    return { count: total, comments: comments };
+  },
+
+  postComment: async function () {
+    throw new Error('التعليق يتطلب تسجيل الدخول في فضاء الروايات');
+  },
+
+  voteComment: async function () {
+    throw new Error('التصويت يتطلب تسجيل الدخول في فضاء الروايات');
   }
 });

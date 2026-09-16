@@ -58,8 +58,8 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:cenele'));
   it('has correct name', () => expect(ext.name).toBe('فضاء الروايات'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.9.6'));
-  it('has apiVersion 1', () => expect(ext.apiVersion).toBe(1));
+  it('has correct version', () => expect(ext.version).toBe('1.10.0'));
+  it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://cenele.com'));
 
   it('exposes all required methods', () => {
@@ -67,6 +67,7 @@ describe('Extension metadata', () => {
       'parseNovelInfo', 'parseChapterList', 'parseChapterContent',
       'searchNovels', 'getPopularNovels',
       'getCategories', 'getCategoryNovels', 'fetchLatestChapters',
+      'getComments', 'postComment', 'voteComment',
     ];
     required.forEach((m) => expect(typeof ext[m]).toBe('function'));
   });
@@ -466,5 +467,93 @@ describe('Caching', () => {
     await ext.parseNovelInfo(uniqueUrl, ctx);
     await ext.parseChapterList(uniqueUrl, ctx);
     expect(fetchCount).toBe(1);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────
+// RSP chapter comments (read-only)
+// ──────────────────────────────────────────────────────────────────
+describe('getComments (RSP)', () => {
+  const CHAPTER_HTML =
+    '<div class="nhv-inline-comments"><div class="rspc-wrap rspc-rtl" ' +
+    'data-entity-key="chapter:115766:الفصل-40" data-post-id="115766"></div></div>' +
+    '<script id="rspc-front-js-extra">var RSPC = {"ajaxUrl":"https://cenele.com/wp-admin/admin-ajax.php",' +
+    '"nonce":"11549b02df","isLogged":"","perPage":"10"}</script>';
+
+  const cardTop = (id, author, time, body, likes) =>
+    '<div class="rspc-comment" data-id="' + id + '">' +
+    '<div class="rspc-comment__head"><span class="rspc-comment__author">' + author + '</span>' +
+    '<span class="rspc-comment__time">' + time + '</span></div>' +
+    '<div class="rspc-comment__text"><p>' + body + '</p></div>' +
+    '<div class="rspc-actions-inline"><button class="rspc-vote rspc-vote--like" data-comment-id="' + id + '" data-vote="like">' +
+    '<span class="rspc-like-count">' + likes + '</span></button></div></div>';
+
+  const cardReply = (id, author, body) =>
+    '<div class="rspc-reply-item" data-id="' + id + '">' +
+    '<span class="rspc-reply-item__author">' + author + '</span>' +
+    '<div class="rspc-reply-item__text"><p>ردًا على <a href="#comment-101">قارئ</a>.</p><p>' + body + '</p></div></div>';
+
+  const PAGE1 = JSON.stringify({
+    success: true,
+    data: {
+      // Top-level card 101 embeds reply 102 inline; card 103 has an image.
+      html:
+        cardTop('101', 'قارئ', 'منذ ساعتين', 'تعليق رائع', '5').replace('</div></div>',
+          cardReply('102', 'المترجم', 'شكرا لك') + '</div></div>') +
+        '<div class="rspc-comment" data-id="103">' +
+        '<span class="rspc-comment__author">زائر</span>' +
+        '<div class="rspc-comment__text"><p>صورة مرفقة</p></div>' +
+        '<div class="rspc-comment__images"><img src="https://cenele.com/wp-content/uploads/pic.jpg" /></div>' +
+        '<span class="rspc-like-count">0</span></div>',
+      total: 3, newOffset: 2, hasMore: true
+    }
+  });
+
+  const PAGE2 = JSON.stringify({
+    success: true,
+    data: {
+      html: cardTop('104', 'قارئ2', '2026-08-20', 'الأخير', '1'),
+      total: 3, newOffset: 3, hasMore: false
+    }
+  });
+
+  const commentCtx = () => mockCtx({
+    'ch-test-40/': ok(CHAPTER_HTML),
+    'admin-ajax.php': (url, init) => {
+      const body = String((init && init.body) || '');
+      expect(body).toContain('action=rspc_load_more');
+      expect(body).toContain('entity_key=chapter');
+      if (body.includes('offset=0')) return ok(PAGE1);
+      return ok(PAGE2);
+    }
+  });
+
+  it('paginates load_more and threads replies with likes/images', async () => {
+    const res = await ext.getComments('https://cenele.com/ch-test-40/', commentCtx());
+    expect(res.count).toBe(3);
+    expect(res.comments.length).toBe(4);
+    const top = res.comments.find((c) => c.id === '101');
+    expect(top.author).toBe('قارئ');
+    expect(top.likes).toBe(5);
+    expect(top.parentId).toBeNull();
+    const reply = res.comments.find((c) => c.id === '102');
+    expect(reply.parentId).toBe('101');
+    expect(reply.body).toBe('شكرا لك');
+    expect(reply.body).not.toContain('ردًا على');
+    const img = res.comments.find((c) => c.id === '103');
+    expect(img.images).toEqual(['https://cenele.com/wp-content/uploads/pic.jpg']);
+    expect(typeof res.comments[0].createdAt).toBe('number');
+  });
+
+  it('returns empty when the chapter has no rspc-wrap', async () => {
+    const ctx = mockCtx({ 'no-rspc/': ok('<html><body>no comments here</body></html>') });
+    const res = await ext.getComments('https://cenele.com/no-rspc/', ctx);
+    expect(res).toEqual({ count: 0, comments: [] });
+  });
+
+  it('postComment and voteComment require login', async () => {
+    const ctx = mockCtx();
+    await expect(ext.postComment('https://cenele.com/ch-test-40/', { body: 'x' }, ctx)).rejects.toThrow('تسجيل الدخول');
+    await expect(ext.voteComment('https://cenele.com/ch-test-40/', { commentId: '101', vote: 1 }, ctx)).rejects.toThrow('تسجيل الدخول');
   });
 });

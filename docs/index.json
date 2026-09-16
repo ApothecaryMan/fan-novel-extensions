@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1789592715094,
+  "generatedAt": 1789592874733,
   "extensions": [
     {
       "id": "site:cenele",
@@ -97,5 +97,5 @@
       "icon": "icons/wuxiaworld.png"
     }
   ],
-  "signature": "wcpabLgPVws8rh9gq96RTWgocZsNsxkB0MFHyzAHvM-9HSRWAuam7v2hVdsq8m2MIXnIbFAStV4S2IyQIXrgAA"
+  "signature": "PkIIrVs-ampTa4OUAnUnsUDvlEFDq_NmWytm7DhqgoGGVp2L_Gu137tVJljChU1bbdmIsEo5yKW4EHbId6hLDA"
 }

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1789593360064,
+  "generatedAt": 1789625290373,
   "extensions": [
     {
       "id": "site:cenele",
@@ -76,10 +76,10 @@
       "id": "site:wikisource",
       "name": "ويكي مصدر",
       "lang": "ar",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "apiVersion": 1,
-      "size": 24710,
-      "sha256": "9db9899ec9e8207463542a64451070ce839833be042113287e5ae1c61ca2233a",
+      "size": 23913,
+      "sha256": "9b1aee97fa18f70ebd63f7473daa45d5424311f836bae721e6d83461dc51f8e8",
       "url": "site.wikisource.js",
       "baseUrl": "https://ar.wikisource.org",
       "icon": "icons/wikisource.png"
@@ -97,5 +97,5 @@
       "icon": "icons/wuxiaworld.png"
     }
   ],
-  "signature": "cDA2AyUOXsf8IwHnLxLf7NBhzCFMRCg4FRHbV9LH2B2kjdSjbXixLP3-diYLssoSBpW-bLrh6u4XW3pOzCSBBA"
+  "signature": "NCc-qQTJzLSOKkCZEjUgCwDvrqC92c7JVgkVxNrzwupDFbEzKxGdWVrwBLV-du2DmLH4nIXObb9AWn4xVEkDCw"
 }

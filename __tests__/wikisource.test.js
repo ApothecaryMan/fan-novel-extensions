@@ -150,13 +150,19 @@ describe('Wikisource Parsing logic with fixtures', () => {
     expect(chapters[0].title).toBe('الباب الأول — الباب الثاني');
   });
 
-  it('browses popular works from the story portal', async () => {
-    const ctx = mockCtx({ '%D8%A8%D9%88%D8%A7%D8%A8%D8%A9': ok(PORTAL_HTML) });
+  it('browses popular works from story categories (merged قصص + روايات)', async () => {
+    const qisas = { query: { categorymembers: [{ pageid: 1, ns: 0, title: 'البخلاء' }] } };
+    const riwayat = { query: { categorymembers: [{ pageid: 2, ns: 0, title: 'مغامرات توم سوير' }] } };
+    const ctx = mockCtx({
+      categorymembers: (url) => ok(JSON.stringify(
+        url.includes(encodeURIComponent('روايات')) ? riwayat : qisas
+      ))
+    });
     const results = await ext.getPopularNovels(1, ctx);
 
     expect(results.length).toBe(2);
-    expect(results[0].title).toBe('كليلة ودمنة');
-    expect(results[1].title).toBe('ألف ليلة وليلة');
+    expect(results.map(r => r.title)).toContain('البخلاء');
+    expect(results.map(r => r.title)).toContain('مغامرات توم سوير');
   });
 
   it('browses category members skipping non-main namespace', async () => {
@@ -169,8 +175,26 @@ describe('Wikisource Parsing logic with fixtures', () => {
 
   it('returns story categories', async () => {
     const categories = await ext.getCategories();
-    expect(categories.length).toBeGreaterThan(5);
-    const qissa = categories.find(c => c.slug === 'qissa');
-    expect(qissa).toBeDefined();
+    expect(categories.length).toBeGreaterThan(3);
+    const merged = categories.find(c => c.slug === 'qisas-riwayat');
+    expect(merged).toBeDefined();
+    const qisas = categories.find(c => c.slug === 'قصص');
+    expect(qisas).toBeDefined();
+  });
+
+  it('never hangs tag extraction on real-world novel HTML', async () => {
+    const fs = await import('fs');
+    const path = await import('path');
+    const file = path.resolve(import.meta.dirname, 'fixtures', 'real-kalila.html');
+    let html;
+    try {
+      html = fs.readFileSync(file, 'utf-8');
+    } catch (e) {
+      return; // fixture absent (network-saved); skip
+    }
+    const t0 = Date.now();
+    const tags = ext._categories(html);
+    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(Array.isArray(tags)).toBe(true);
   });
 });

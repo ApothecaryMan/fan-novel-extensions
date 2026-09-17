@@ -1,6 +1,6 @@
 // @id       site:wikisource
 // @name     ويكي مصدر
-// @version  1.0.1
+// @version  1.0.2
 // @lang     ar
 // @apiVersion 1
 // @baseUrl  https://ar.wikisource.org
@@ -58,7 +58,7 @@ registerExtension({
   id: 'site:wikisource',
   name: 'ويكي مصدر',
   lang: 'ar',
-  version: '1.0.1',
+  version: '1.0.2',
   apiVersion: 1,
   baseUrl: 'https://ar.wikisource.org',
 
@@ -250,15 +250,22 @@ registerExtension({
 
   // Real topic categories only (hrefs are percent-encoded): skip proofread
   // progress ("25%") and maintenance cats.
+  // NOTE: kept linear on purpose — an earlier alternation-based pattern
+  // (nested quantifiers over long %D9%83-style hrefs) caused catastrophic
+  // backtracking that hung novel pages indefinitely. Never reintroduce
+  // nested quantifiers here: match plain anchors, filter in JS.
   _categories: function (html) {
     var tags = [];
     if (!html) return tags;
     var seen = Object.create(null);
-    var re = /<a[^>]+href="\/wiki\/((?:%[0-9A-Fa-f]{2}|[^"#?\s])+)"[^>]*>([^<]*)<\/a>/gi;
+    var re = /<a\s[^>]*href="([^"]+)"[^>]*>([^<]*)<\/a>/gi;
     var m;
     while ((m = re.exec(html)) !== null) {
+      var href = m[1];
+      if (href.indexOf('/wiki/') !== 0) continue;
+      var enc = href.substring(6).split('#')[0].split('?')[0];
       var raw;
-      try { raw = decodeURIComponent(m[1]).replace(/_/g, ' ').trim(); } catch (e) { continue; }
+      try { raw = decodeURIComponent(enc).replace(/_/g, ' ').trim(); } catch (e) { continue; }
       if (raw.indexOf('تصنيف:') !== 0) continue;
       var t = this._decodeEntities(m[2] || '').trim();
       if (!t) t = raw.substring('تصنيف:'.length);
@@ -536,45 +543,24 @@ registerExtension({
     return this._mapSearchResults(json);
   },
 
-  // Curated portal shelves (بوابة:قصة ...) — the only reliable browse lists.
-  // Categorymembers is too sparse (تصنيف:قصة holds a single page).
-  _parsePortalWorks: function (rootHtml) {
+  // Popular shelf: merged main-namespace members of the two verified story
+  // categories (تصنيف:قصص + تصنيف:روايات). The old بوابة:قصة shelf held 6
+  // works only, and تصنيف:قصة holds a single page — hence the merge.
+  _POPULAR_CATS: ['قصص', 'روايات'],
+
+  _mergeUnique: function (lists) {
     var out = [];
     var seen = Object.create(null);
-    if (!rootHtml) return out;
-    var re = /<a[^>]+href="(\/wiki\/([^"#?]+))"[^>]*>([^<]{2,80})<\/a>/gi;
-    var m;
-    while ((m = re.exec(rootHtml)) !== null) {
-      var raw;
-      try { raw = decodeURIComponent(m[2]).replace(/_/g, ' ').trim(); } catch (e) { continue; }
-      if (!raw || raw.indexOf(':') !== -1) continue;
-      if (/^(الصفحة الرئيسية|تصفح|مساعدة|الميدان)$/.test(raw)) continue;
-      var full = this._absUrl(m[1]);
-      if (seen[full]) continue;
-      seen[full] = true;
-      var label = this._decodeEntities(this._stripTags(m[3])).trim() || raw;
-      out.push({
-        source: this.id,
-        url: full,
-        title: label,
-        author: 'ويكي مصدر',
-        category: 'نصوص حرة',
-        status: 'مكتملة'
-      });
+    for (var i = 0; i < lists.length; i++) {
+      var arr = lists[i] || [];
+      for (var j = 0; j < arr.length; j++) {
+        var it = arr[j];
+        if (!it || !it.url || seen[it.url]) continue;
+        seen[it.url] = true;
+        out.push(it);
+      }
     }
     return out;
-  },
-
-  _browsePortal: async function (portal, ctx) {
-    var html;
-    try {
-      html = await this._fetchHtml(
-        this._absUrl('/wiki/' + encodeURIComponent(('بوابة:' + portal).replace(/ /g, '_'))), ctx
-      );
-    } catch (e) {
-      return null;
-    }
-    return this._parsePortalWorks(this._cleanContentRoot(this._contentRoot(html)));
   },
 
   _mapCategoryMembers: function (json) {
@@ -623,40 +609,32 @@ registerExtension({
 
   getPopularNovels: async function (page, ctx) {
     var pageNum = (page && page > 1) ? Math.floor(page) : 1;
-    if (pageNum > 1) return [];
-    var out = await this._browsePortal('قصة', ctx);
-    return out || [];
+    var self = this;
+    var lists = [];
+    for (var i = 0; i < self._POPULAR_CATS.length; i++) {
+      var res = await self._browseCategory(self._POPULAR_CATS[i], pageNum, ctx);
+      if (res && res.length > 0) lists.push(res);
+    }
+    return self._mergeUnique(lists);
   },
 
   // ---------------------------------------------------------------
-  // Category / Topic browsing
+  // Category / Topic browsing (verified main-namespace categories)
   // ---------------------------------------------------------------
-  // Portal shelves for the two verified portals, API fallback otherwise.
-  _PORTAL_BY_SLUG: { 'qissa': 'قصة', 'shi3r': 'شعر' },
-
   getCategories: async function () {
     return [
-      { name: 'قصص وروايات', slug: 'qissa' },
-      { name: 'شعر', slug: 'shi3r' },
-      { name: 'مقامات', slug: 'مقامات' },
-      { name: 'كتب إسلامية', slug: 'كتب إسلامية' },
-      { name: 'نصوص تاريخية', slug: 'تاريخ' },
-      { name: 'نصوص فلسفية', slug: 'فلسفة' },
-      { name: 'اللغة العربية', slug: 'اللغة العربية' },
-      { name: 'مقالات', slug: 'مقالات' },
-      { name: 'خطب ومواعظ', slug: 'خطب' },
-      { name: 'نصوص قانونية', slug: 'قانون' }
+      { name: 'قصص وروايات', slug: 'qisas-riwayat' },
+      { name: 'قصص', slug: 'قصص' },
+      { name: 'روايات', slug: 'روايات' },
+      { name: 'أدب', slug: 'أدب' },
+      { name: 'شعر', slug: 'شعر' }
     ];
   },
 
   getCategoryNovels: async function (categorySlug, page, ctx) {
-    var slug = (categorySlug || 'qissa').trim() || 'qissa';
-    var portal = Object.prototype.hasOwnProperty.call(this._PORTAL_BY_SLUG, slug)
-      ? this._PORTAL_BY_SLUG[slug]
-      : null;
-    if (portal) {
-      var works = await this._browsePortal(portal, ctx);
-      if (works && works.length > 0) return works;
+    var slug = (categorySlug || 'qisas-riwayat').trim() || 'qisas-riwayat';
+    if (slug === 'qisas-riwayat' || slug === 'qissa') {
+      return this.getPopularNovels(page, ctx);
     }
     var out = await this._browseCategory(slug, page, ctx);
     return out || [];

@@ -58,7 +58,7 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:cenele'));
   it('has correct name', () => expect(ext.name).toBe('فضاء الروايات'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.10.2'));
+  it('has correct version', () => expect(ext.version).toBe('1.10.4'));
   it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://cenele.com'));
 
@@ -580,6 +580,106 @@ describe('getComments (RSP)', () => {
     const dual = res.comments.find((c) => c.id === '202');
     const expected = Date.now() - 2 * 3600 * 1000;
     expect(Math.abs(dual.createdAt - expected)).toBeLessThan(5 * 60 * 1000);
+  });
+
+  it('parses DD/MM/YYYY date format (cenele comment style)', async () => {
+    const html =
+      '<div class="rspc-comment" data-id="301">' +
+      '<span class="rspc-comment__author">قارئ</span>' +
+      '<span class="rspc-comment__time">19/08/2026</span>' +
+      '<div class="rspc-comment__text"><p>تاريخ رقمي</p></div></div>' +
+      '<div class="rspc-comment" data-id="302">' +
+      '<span class="rspc-comment__author">قارئ2</span>' +
+      '<span class="rspc-comment__time">06/08/2026</span>' +
+      '<div class="rspc-comment__text"><p>تاريخ آخر</p></div></div>';
+    const ctx = mockCtx({
+      'ch-dmy/': ok(
+        '<div class="rspc-wrap" data-entity-key="chapter:1:x"></div>' +
+        '<script>var RSPC = {"ajaxUrl":"https://cenele.com/wp-admin/admin-ajax.php","nonce":"abc123"}</script>'
+      ),
+      'admin-ajax.php': ok(JSON.stringify({
+        success: true, data: { html, total: 2, newOffset: 2, hasMore: false }
+      }))
+    });
+    const res = await ext.getComments('https://cenele.com/ch-dmy/', ctx);
+    const d1 = res.comments.find((c) => c.id === '301');
+    const d2 = res.comments.find((c) => c.id === '302');
+    // 19/08/2026 = 19 August 2026
+    expect(d1.createdAt).toBe(new Date(2026, 7, 19, 12, 0, 0).getTime());
+    // 06/08/2026 = 6 August 2026
+    expect(d2.createdAt).toBe(new Date(2026, 7, 6, 12, 0, 0).getTime());
+  });
+
+  it('parses قبل-relative times (real cenele comment style)', async () => {
+    const html =
+      '<div class="rspc-comment" data-id="401">' +
+      '<span class="rspc-comment__author">قارئ</span>' +
+      '<span class="rspc-comment__time">قبل 18 ساعات</span>' +
+      '<div class="rspc-comment__text"><p>نسبي برقم</p></div></div>' +
+      '<div class="rspc-comment" data-id="402">' +
+      '<span class="rspc-comment__author">قارئ2</span>' +
+      '<span class="rspc-comment__time">قبل يومين</span>' +
+      '<div class="rspc-comment__text"><p>مثنى بلا رقم</p></div></div>';
+    const ctx = mockCtx({
+      'ch-qabl/': ok(
+        '<div class="rspc-wrap" data-entity-key="chapter:1:x"></div>' +
+        '<script>var RSPC = {"ajaxUrl":"https://cenele.com/wp-admin/admin-ajax.php","nonce":"abc123"}</script>'
+      ),
+      'admin-ajax.php': ok(JSON.stringify({
+        success: true, data: { html, total: 2, newOffset: 2, hasMore: false }
+      }))
+    });
+    const res = await ext.getComments('https://cenele.com/ch-qabl/', ctx);
+    const hours = res.comments.find((c) => c.id === '401');
+    expect(Math.abs(hours.createdAt - (Date.now() - 18 * 3600 * 1000))).toBeLessThan(5 * 60 * 1000);
+    const dual = res.comments.find((c) => c.id === '402');
+    expect(Math.abs(dual.createdAt - (Date.now() - 2 * 24 * 3600 * 1000))).toBeLessThan(5 * 60 * 1000);
+  });
+
+  it('fetches lazy reply threads with the site thread contract (parent_id/level/root_id)', async () => {
+    const topHtml =
+      '<div class="rspc-comment" data-id="501">' +
+      '<span class="rspc-comment__author">قارئ</span>' +
+      '<span class="rspc-comment__time">19/08/2026</span>' +
+      '<div class="rspc-comment__text"><p>تعليق له رد</p></div>' +
+      '<div class="rspc-replies rspc-thread rspc-hidden" id="rspc-thread-501" data-parent="501" data-level="1" data-loaded="0"></div>' +
+      '</div>';
+    const threadHtml =
+      '<div class="rspc-reply-item" data-id="502">' +
+      '<span class="rspc-reply-item__author">المترجم</span>' +
+      '<span class="rspc-reply-item__time">20/08/2026</span>' +
+      '<div class="rspc-reply-item__text"><p>رد حقيقي</p></div></div>';
+    const seen = [];
+    const ctx = mockCtx({
+      'ch-thread/': ok(
+        '<div class="rspc-wrap" data-entity-key="chapter:1:x"></div>' +
+        '<script>var RSPC = {"ajaxUrl":"https://cenele.com/wp-admin/admin-ajax.php","nonce":"abc123"}</script>'
+      ),
+      'admin-ajax.php': (url, init) => {
+        const body = String((init && init.body) || '');
+        if (body.includes('action=rspc_load_more')) {
+          return ok(JSON.stringify({ success: true, data: { html: topHtml, total: 2, newOffset: 1, hasMore: false } }));
+        }
+        if (body.includes('action=rspc_load_thread')) {
+          seen.push(body);
+          return ok(JSON.stringify({ success: true, data: { html: threadHtml } }));
+        }
+        return { ok: false, status: 404, text: '' };
+      }
+    });
+    const res = await ext.getComments('https://cenele.com/ch-thread/', ctx);
+    // Site contract: parent_id + level + root_id (never comment_id/offset).
+    expect(seen.length).toBe(1);
+    expect(seen[0]).toContain('parent_id=501');
+    expect(seen[0]).toContain('level=1');
+    expect(seen[0]).toContain('root_id=501');
+    expect(seen[0]).not.toContain('comment_id');
+    // Reply threaded under its parent with a correct epoch.
+    const reply = res.comments.find((c) => c.id === '502');
+    expect(reply).toBeTruthy();
+    expect(reply.parentId).toBe('501');
+    expect(reply.body).toBe('رد حقيقي');
+    expect(reply.createdAt).toBe(new Date(2026, 7, 20, 12, 0, 0).getTime());
   });
 
   it('postComment and voteComment require login', async () => {

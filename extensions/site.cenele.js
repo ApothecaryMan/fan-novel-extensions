@@ -61,7 +61,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.10.2',
+  version: '1.10.4',
   apiVersion: 2,
   baseUrl: 'https://cenele.com',
 
@@ -162,7 +162,9 @@ registerExtension({
     if (!str) return undefined;
     var now = Date.now();
 
-    // Relative Arabic ("منذ N وحدة" / "N وحدة منذ").
+    // Relative Arabic ("منذ N وحدة" for chapters, "قبل N وحدة" for comments —
+    // the site uses BOTH markers: admin-ajax chapter dates use منذ, RSPC
+    // comment times use قبل. Verified against real fixtures 2026-09-03.)
     var relMs;
     if (/دقيق/.test(str)) relMs = 60 * 1000;
     else if (/ساع/.test(str)) relMs = 3600 * 1000;
@@ -171,10 +173,11 @@ registerExtension({
     else if (/شهر/.test(str)) relMs = 30 * 24 * 3600 * 1000;
     else if (/سن|عام/.test(str)) relMs = 365 * 24 * 3600 * 1000;
     if (relMs) {
-      if (str.indexOf('منذ') !== -1) {
+      if (str.indexOf('منذ') !== -1 || str.indexOf('قبل') !== -1) {
         var m = str.match(/(\d+)/);
         if (m) return now - relMs * parseInt(m[1], 10);
-        // Dual form without digits ("منذ ساعتين"): two units.
+        // Dual/singular without digits ("منذ ساعتين", "قبل يومين",
+        // "منذ ساعة واحدة", "منذ يوم واحد"): two units for dual, one otherwise.
         if (/تين\b|تان\b|تين\s|ساعتين|يومين|أسبوعين|اسبوعين|شهرين|سنتين|عامين|دقيقتين/.test(str)) {
           return now - relMs * 2;
         }
@@ -182,15 +185,26 @@ registerExtension({
       }
     }
 
-    // Absolute Arabic month names.
+    // DD/MM/YYYY or DD-MM-YYYY (common in cenele comments).
+    var dmY = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if (dmY) {
+      var day = parseInt(dmY[1], 10);
+      var month = parseInt(dmY[2], 10) - 1; // JS months are 0-indexed
+      var year = parseInt(dmY[3], 10);
+      if (month >= 0 && month <= 11 && day >= 1 && day <= 31) {
+        var d = new Date(year, month, day, 12, 0, 0);
+        if (!isNaN(d.getTime())) return d.getTime();
+      }
+    }
+
+    // Absolute Arabic month names. The site's WordPress locale renders the
+    // standard Arabic month names (يونيو, يوليو, أغسطس, … — verified in real
+    // chapter-list payloads). Levantine/Maghrebi aliases (كانون, شباط, جانفي,
+    // …) never occur on this site and were removed.
     var months = {
-      'يناير': 0, 'كانون الثاني': 0, 'جانفي': 0, 'فبراير': 1, 'شباط': 1, 'فيفري': 1,
-      'مارس': 2, 'آذار': 2, 'اذار': 2, 'أبريل': 3, 'ابريل': 3, 'نيسان': 3, 'افريل': 3,
-      'مايو': 4, 'أيار': 4, 'ايار': 4, 'ماي': 4, 'يونيو': 5, 'حزيران': 5, 'جوان': 5,
-      'يوليو': 6, 'تموز': 6, 'جويلية': 6, 'أغسطس': 7, 'اغسطس': 7, 'آب': 7, 'اب': 7, 'غشت': 7, 'اوت': 7,
-      'سبتمبر': 8, 'أيلول': 8, 'ايلول': 8, 'شتنبر': 8, 'أكتوبر': 9, 'اكتوبر': 9,
-      'تشرين الأول': 9, 'تشرين الاول': 9, 'نوفمبر': 10, 'تشرين الثاني': 10,
-      'ديسمبر': 11, 'كانون الأول': 11, 'كانون الاول': 11, 'دجنبر': 11
+      'يناير': 0, 'فبراير': 1, 'مارس': 2, 'أبريل': 3, 'ابريل': 3,
+      'مايو': 4, 'يونيو': 5, 'يوليو': 6, 'أغسطس': 7, 'اغسطس': 7,
+      'سبتمبر': 8, 'أكتوبر': 9, 'اكتوبر': 9, 'نوفمبر': 10, 'ديسمبر': 11
     };
     for (var mName in months) {
       if (str.indexOf(mName) !== -1) {
@@ -778,20 +792,65 @@ registerExtension({
     };
   },
 
-  // Refresh a stale RSP nonce (403 / '-1' / bad_nonce). Mutates props.
-  _rspcRefreshNonce: async function (props, ctx, referer) {
-    try {
-      var r = await this._ajaxPost(props.ajaxUrl, { action: 'rspc_refresh_nonce' }, ctx, referer);
-      var j = this._parseAjaxJson(r, null);
-      var d = (j && j.data && typeof j.data === 'object') ? j.data : null;
-      if (d && d.nonce) {
-        props.nonce = d.nonce;
-        return true;
+  // Load a comment thread (replies) via rspc_load_thread, mirroring the
+  // site's own front.js exactly: {action, nonce, entity_key, parent_id,
+  // level, root_id} → single-shot {html} (no pagination). Returns the
+  // unwrapped payload {html} or null when un-fetchable.
+  _rspcLoadThread: async function (props, parentId, level, rootId, ctx, referer) {
+    for (var attempt = 0; attempt < 3; attempt++) {
+      var r;
+      try {
+        r = await this._ajaxPost(props.ajaxUrl, {
+          action: 'rspc_load_thread',
+          nonce: props.nonce,
+          entity_key: props.entityKey,
+          parent_id: String(parentId),
+          level: String(level),
+          root_id: String(rootId || parentId)
+        }, ctx, referer);
+      } catch (e) {
+        if (ctx && ctx.log) ctx.log('warn', 'cenele: rspc thread', parentId, 'transport error:', e && e.message);
+        await _sleep(400 * (attempt + 1));
+        continue;
       }
-    } catch (e) {
-      if (ctx && ctx.log) ctx.log('warn', 'cenele: rspc nonce refresh failed');
+      var j = this._parseAjaxJson(r, null);
+      var text = (r && typeof r.text === 'string') ? r.text.trim() : '';
+      var badNonce = r.status === 403 || text === '-1' ||
+        (j && ((j.error === 'bad_nonce') || (j.data && j.data.error === 'bad_nonce')));
+      if (badNonce) {
+        if (ctx && ctx.log) ctx.log('info', 'cenele: rspc thread stale nonce, refreshing');
+        if (await this._rspcRefreshNonce(props, ctx, referer)) continue;
+        return null;
+      }
+      if (!r.ok) {
+        if (ctx && ctx.log) ctx.log('warn', 'cenele: rspc thread', parentId, '→ HTTP', r.status);
+        await _sleep(400 * (attempt + 1));
+        continue;
+      }
+      if (!j) return null;
+      var d = (j.data && typeof j.data === 'object') ? j.data : j;
+      if (d && typeof d === 'object' && typeof d.html === 'string') return d;
+      return null;
     }
-    return false;
+    return null;
+  },
+
+  // Parse a thread HTML payload into the flat out[] list. A level-1 payload
+  // holds rspc-reply-item cards (parentId = the top comment); any
+  // rspc-subreply cards nested inside a reply belong to that reply.
+  _parseRspcThread: function (html, fullUrl, parentId, out) {
+    if (!html) return;
+    var spans = this._rspcCardSpans(html, 'rspc-reply-item');
+    for (var i = 0; i < spans.length; i++) {
+      var itemHtml = html.slice(spans[i].start, spans[i].end);
+      var node = this._rspcNode(spans[i].id, itemHtml, parentId, 'rspc-reply-item', fullUrl);
+      if (node) out.push(node);
+      var popped = this._rspcPopNested(itemHtml, 'rspc-subreply');
+      for (var s = 0; s < popped.blocks.length; s++) {
+        var snode = this._rspcNode(popped.blocks[s].id, popped.blocks[s].html, spans[i].id, 'rspc-subreply', fullUrl);
+        if (snode) out.push(snode);
+      }
+    }
   },
 
   // One rspc_load_more page with nonce-refresh retry. Returns the unwrapped
@@ -995,6 +1054,35 @@ registerExtension({
     }
   },
 
+  // Extract lazy thread containers from HTML.
+  // Real markup: <div class="rspc-replies rspc-thread …"
+  //   data-parent="161781" data-level="1" data-loaded="0"> (data-root only on
+  //   the toggle button, so level-1 containers default rootId to parentId).
+  // Returns [{parentId, level, rootId, loaded}].
+  _rspcThreadContainers: function (html) {
+    var threads = [];
+    var re = /<div[^>]*>/gi;
+    var m;
+    while ((m = re.exec(html)) !== null) {
+      var tag = m[0];
+      if (tag.indexOf('rspc-thread') === -1) continue;
+      var cls = tag.match(/class="([^"]*)"/i);
+      if (!cls || cls[1].split(/\s+/).indexOf('rspc-thread') === -1) continue;
+      var par = tag.match(/data-parent="(\d+)"/i);
+      var lvl = tag.match(/data-level="(\d+)"/i);
+      if (!par || !lvl) continue;
+      var lod = tag.match(/data-loaded="(\d)"/i);
+      var root = tag.match(/data-root="(\d+)"/i);
+      threads.push({
+        parentId: par[1],
+        level: parseInt(lvl[1], 10),
+        rootId: root ? root[1] : par[1],
+        loaded: lod ? lod[1] === '1' : false
+      });
+    }
+    return threads;
+  },
+
   getComments: async function (chapterUrl, ctx) {
     var fullUrl = this._absUrl(chapterUrl);
     var res = await this._safeFetch(fullUrl, ctx, 'فشل جلب صفحة الفصل');
@@ -1002,11 +1090,17 @@ registerExtension({
     var props = this._rspcProps(res.text || '');
     if (!props) return { count: 0, comments: [] };
     var referer = fullUrl;
+
+    // Parse initial page for thread containers (replies loaded lazily)
+    var initialThreads = this._rspcThreadContainers(res.text || '');
+
     var first = await this._rspcLoadPage(props, 0, 'latest', ctx, referer);
     if (!first) return { count: 0, comments: [] };
     var total = parseInt(first.total, 10);
     if (isNaN(total) || total < 0) total = 0;
     var pages = [first.html || ''];
+    var firstThreads = this._rspcThreadContainers(first.html || '');
+    for (var ft = 0; ft < firstThreads.length; ft++) initialThreads.push(firstThreads[ft]);
     var offset = parseInt(first.newOffset, 10) || 0;
     var hasMore = !!first.hasMore;
     var guard = 0;
@@ -1018,6 +1112,9 @@ registerExtension({
       var pg = await this._rspcLoadPage(props, offset, 'latest', ctx, referer);
       if (!pg) break;
       pages.push(pg.html || '');
+      // Also check AJAX pages for thread containers
+      var moreThreads = this._rspcThreadContainers(pg.html || '');
+      for (var t = 0; t < moreThreads.length; t++) initialThreads.push(moreThreads[t]);
       offset = parseInt(pg.newOffset, 10) || offset;
       hasMore = !!pg.hasMore;
     }
@@ -1026,6 +1123,34 @@ registerExtension({
     for (var i = 0; i < pages.length; i++) {
       this._parseRspcPage(pages[i], fullUrl, comments);
     }
+
+    // Fetch lazy reply threads (rspc_load_thread), mirroring the site's own
+    // front.js: {parent_id, level, root_id} → single-shot {html}.
+    // Level-1 containers are discovered in the chapter page + load_more HTML;
+    // level-2 (nested) containers are discovered inside fetched thread HTML.
+    var threadQueue = initialThreads.slice();
+    var seenThreads = {};
+    var threadCount = 0;
+    while (threadQueue.length && threadCount < 12) {
+      var th = threadQueue.shift();
+      var key = th.parentId + ':' + th.level;
+      if (seenThreads[key] || th.loaded) continue;
+      seenThreads[key] = true;
+      threadCount++;
+      if (threadCount > 1) await _sleep(200 + Math.floor(Math.random() * 200));
+      var threadPage = await this._rspcLoadThread(props, th.parentId, th.level, th.rootId, ctx, referer);
+      if (!threadPage || !threadPage.html) continue;
+      this._parseRspcThread(threadPage.html, fullUrl, th.parentId, comments);
+      var nested = this._rspcThreadContainers(threadPage.html);
+      for (var ni = 0; ni < nested.length; ni++) {
+        if (!nested[ni].loaded) {
+          nested[ni].rootId = th.rootId; // nested replies belong to the top root
+          threadQueue.push(nested[ni]);
+        }
+      }
+    }
+    if (threadCount && ctx && ctx.log) ctx.log('info', 'cenele: loaded', threadCount, 'reply thread(s)');
+
     comments.sort(function (a, b) { return a.createdAt - b.createdAt; });
     if (!total) total = comments.length;
     return { count: total, comments: comments };
@@ -1036,6 +1161,6 @@ registerExtension({
   },
 
   voteComment: async function () {
-    throw new Error('التصويت يتطلب تسجيل الدخول في فضاء الروايات');
+    throw new Error('الاعجاب يتطلب تسجيل الدخول في فضاء الروايات');
   }
 });

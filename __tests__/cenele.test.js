@@ -58,7 +58,7 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:cenele'));
   it('has correct name', () => expect(ext.name).toBe('فضاء الروايات'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.10.4'));
+  it('has correct version', () => expect(ext.version).toBe('1.11.0'));
   it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://cenele.com'));
 
@@ -67,7 +67,7 @@ describe('Extension metadata', () => {
       'parseNovelInfo', 'parseChapterList', 'parseChapterContent',
       'searchNovels', 'getPopularNovels',
       'getCategories', 'getCategoryNovels', 'fetchLatestChapters',
-      'getComments', 'postComment', 'voteComment',
+      'getComments', 'getCommentReplies', 'postComment', 'voteComment',
     ];
     required.forEach((m) => expect(typeof ext[m]).toBe('function'));
   });
@@ -552,7 +552,7 @@ describe('getComments (RSP)', () => {
   it('returns empty when the chapter has no rspc-wrap', async () => {
     const ctx = mockCtx({ 'no-rspc/': ok('<html><body>no comments here</body></html>') });
     const res = await ext.getComments('https://cenele.com/no-rspc/', ctx);
-    expect(res).toEqual({ count: 0, comments: [] });
+    expect(res).toEqual({ count: 0, comments: [], nextOffset: 0, hasMore: false });
   });
 
   it('prefers machine timestamps and parses dual relative forms', async () => {
@@ -636,14 +636,77 @@ describe('getComments (RSP)', () => {
     expect(Math.abs(dual.createdAt - (Date.now() - 2 * 24 * 3600 * 1000))).toBeLessThan(5 * 60 * 1000);
   });
 
-  it('fetches lazy reply threads with the site thread contract (parent_id/level/root_id)', async () => {
+  it('never prefetches threads; exposes repliesTotal from toggle buttons', async () => {
     const topHtml =
       '<div class="rspc-comment" data-id="501">' +
       '<span class="rspc-comment__author">قارئ</span>' +
       '<span class="rspc-comment__time">19/08/2026</span>' +
-      '<div class="rspc-comment__text"><p>تعليق له رد</p></div>' +
+      '<div class="rspc-comment__text"><p>تعليق له ردود</p></div>' +
+      '<button class="rspc-link rspc-thread-toggle" data-target="rspc-thread-501" data-parent="501" data-level="1" data-root="501">عرض الردود (2)</button>' +
       '<div class="rspc-replies rspc-thread rspc-hidden" id="rspc-thread-501" data-parent="501" data-level="1" data-loaded="0"></div>' +
       '</div>';
+    let threadCalls = 0;
+    const ctx = mockCtx({
+      'ch-collapsed/': ok(
+        '<div class="rspc-wrap" data-entity-key="chapter:1:x"></div>' +
+        '<script>var RSPC = {"ajaxUrl":"https://cenele.com/wp-admin/admin-ajax.php","nonce":"abc123"}</script>'
+      ),
+      'admin-ajax.php': (url, init) => {
+        const body = String((init && init.body) || '');
+        if (body.includes('action=rspc_load_thread')) threadCalls++;
+        if (body.includes('action=rspc_load_more')) {
+          return ok(JSON.stringify({ success: true, data: { html: topHtml, total: 1, newOffset: 1, hasMore: false } }));
+        }
+        return { ok: false, status: 404, text: '' };
+      }
+    });
+    const res = await ext.getComments('https://cenele.com/ch-collapsed/', ctx);
+    expect(threadCalls).toBe(0);
+    expect(res.comments.length).toBe(1);
+    expect(res.comments[0].repliesTotal).toBe(2);
+    expect(res.hasMore).toBe(false);
+  });
+
+  it('pages by offset and reports nextOffset/hasMore', async () => {
+    // 6 server pages x 2 tops; one call loads at most 5 pages (same cap as
+    // the pre-chunk behavior), the rest continues from nextOffset.
+    const page = (ids) => ids.map((id) =>
+      '<div class="rspc-comment" data-id="' + id + '">' +
+      '<span class="rspc-comment__author">u' + id + '</span>' +
+      '<span class="rspc-comment__time">19/08/2026</span>' +
+      '<div class="rspc-comment__text"><p>body ' + id + '</p></div></div>'
+    ).join('');
+    const byOffset = {
+      0: { ids: [701, 702], newOffset: 2, hasMore: true },
+      2: { ids: [703, 704], newOffset: 4, hasMore: true },
+      4: { ids: [705, 706], newOffset: 6, hasMore: true },
+      6: { ids: [707, 708], newOffset: 8, hasMore: true },
+      8: { ids: [709, 710], newOffset: 10, hasMore: true },
+      10: { ids: [711, 712], newOffset: 12, hasMore: false }
+    };
+    const ctx = mockCtx({
+      'ch-pages/': ok(
+        '<div class="rspc-wrap" data-entity-key="chapter:1:x"></div>' +
+        '<script>var RSPC = {"ajaxUrl":"https://cenele.com/wp-admin/admin-ajax.php","nonce":"abc123"}</script>'
+      ),
+      'admin-ajax.php': (url, init) => {
+        const body = String((init && init.body) || '');
+        const off = parseInt((body.match(/offset=(\d+)/) || [])[1] || '0', 10);
+        const pg = byOffset[off] || { ids: [], newOffset: off, hasMore: false };
+        return ok(JSON.stringify({ success: true, data: { html: page(pg.ids), total: 12, newOffset: pg.newOffset, hasMore: pg.hasMore } }));
+      }
+    });
+    const first = await ext.getComments('https://cenele.com/ch-pages/', 0, ctx);
+    expect(first.comments.map((c) => c.id)).toEqual(['701', '702', '703', '704', '705', '706', '707', '708', '709', '710']);
+    expect(first.nextOffset).toBe(10);
+    expect(first.hasMore).toBe(true);
+    expect(first.count).toBe(12);
+    const second = await ext.getComments('https://cenele.com/ch-pages/', first.nextOffset, ctx);
+    expect(second.comments.map((c) => c.id)).toEqual(['711', '712']);
+    expect(second.hasMore).toBe(false);
+  });
+
+  it('getCommentReplies fetches one thread with the site contract (parent_id/level/root_id)', async () => {
     const threadHtml =
       '<div class="rspc-reply-item" data-id="502">' +
       '<span class="rspc-reply-item__author">المترجم</span>' +
@@ -651,15 +714,12 @@ describe('getComments (RSP)', () => {
       '<div class="rspc-reply-item__text"><p>رد حقيقي</p></div></div>';
     const seen = [];
     const ctx = mockCtx({
-      'ch-thread/': ok(
+      'ch-replies/': ok(
         '<div class="rspc-wrap" data-entity-key="chapter:1:x"></div>' +
         '<script>var RSPC = {"ajaxUrl":"https://cenele.com/wp-admin/admin-ajax.php","nonce":"abc123"}</script>'
       ),
       'admin-ajax.php': (url, init) => {
         const body = String((init && init.body) || '');
-        if (body.includes('action=rspc_load_more')) {
-          return ok(JSON.stringify({ success: true, data: { html: topHtml, total: 2, newOffset: 1, hasMore: false } }));
-        }
         if (body.includes('action=rspc_load_thread')) {
           seen.push(body);
           return ok(JSON.stringify({ success: true, data: { html: threadHtml } }));
@@ -667,19 +727,16 @@ describe('getComments (RSP)', () => {
         return { ok: false, status: 404, text: '' };
       }
     });
-    const res = await ext.getComments('https://cenele.com/ch-thread/', ctx);
-    // Site contract: parent_id + level + root_id (never comment_id/offset).
+    const res = await ext.getCommentReplies('https://cenele.com/ch-replies/', '501', ctx);
     expect(seen.length).toBe(1);
     expect(seen[0]).toContain('parent_id=501');
     expect(seen[0]).toContain('level=1');
     expect(seen[0]).toContain('root_id=501');
     expect(seen[0]).not.toContain('comment_id');
-    // Reply threaded under its parent with a correct epoch.
-    const reply = res.comments.find((c) => c.id === '502');
-    expect(reply).toBeTruthy();
-    expect(reply.parentId).toBe('501');
-    expect(reply.body).toBe('رد حقيقي');
-    expect(reply.createdAt).toBe(new Date(2026, 7, 20, 12, 0, 0).getTime());
+    expect(res.comments.length).toBe(1);
+    expect(res.comments[0].parentId).toBe('501');
+    expect(res.comments[0].body).toBe('رد حقيقي');
+    expect(res.comments[0].createdAt).toBe(new Date(2026, 7, 20, 12, 0, 0).getTime());
   });
 
   it('postComment and voteComment require login', async () => {

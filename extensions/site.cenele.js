@@ -61,7 +61,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.10.4',
+  version: '1.11.0',
   apiVersion: 2,
   baseUrl: 'https://cenele.com',
 
@@ -1054,106 +1054,117 @@ registerExtension({
     }
   },
 
-  // Extract lazy thread containers from HTML.
-  // Real markup: <div class="rspc-replies rspc-thread …"
-  //   data-parent="161781" data-level="1" data-loaded="0"> (data-root only on
-  //   the toggle button, so level-1 containers default rootId to parentId).
-  // Returns [{parentId, level, rootId, loaded}].
-  _rspcThreadContainers: function (html) {
-    var threads = [];
-    var re = /<div[^>]*>/gi;
+  // Extract "عرض الردود (N)" toggle counts: returns {parentId: N}.
+  // The host renders collapsed replies with the true remaining count.
+  _rspcReplyCounts: function (html) {
+    var counts = {};
+    var re = /<button[^>]*class="[^"]*rspc-thread-toggle[^"]*"[^>]*data-parent="(\d+)"[^>]*>([\s\S]*?)<\/button>/gi;
     var m;
     while ((m = re.exec(html)) !== null) {
-      var tag = m[0];
-      if (tag.indexOf('rspc-thread') === -1) continue;
-      var cls = tag.match(/class="([^"]*)"/i);
-      if (!cls || cls[1].split(/\s+/).indexOf('rspc-thread') === -1) continue;
-      var par = tag.match(/data-parent="(\d+)"/i);
-      var lvl = tag.match(/data-level="(\d+)"/i);
-      if (!par || !lvl) continue;
-      var lod = tag.match(/data-loaded="(\d)"/i);
-      var root = tag.match(/data-root="(\d+)"/i);
-      threads.push({
-        parentId: par[1],
-        level: parseInt(lvl[1], 10),
-        rootId: root ? root[1] : par[1],
-        loaded: lod ? lod[1] === '1' : false
-      });
+      var n = m[2].match(/(\d+)/);
+      if (n) {
+        var c = parseInt(n[1], 10);
+        if (!isNaN(c) && c > 0) counts[m[1]] = c;
+      }
     }
-    return threads;
+    return counts;
   },
 
-  getComments: async function (chapterUrl, ctx) {
+  // Chunked comment load. `offset` is optional (backward compatible: old
+  // hosts call getComments(url, ctx)). Each call fetches up to 5 load_more
+  // pages starting at `offset` and returns {count, comments, nextOffset,
+  // hasMore} so the host can page ("عرض المزيد…") or auto-continue.
+  // Replies are NEVER prefetched here — tops carry `repliesTotal` parsed
+  // from the toggle buttons; threads load via getCommentReplies on demand.
+  getComments: async function (chapterUrl, offset, ctx) {
+    if (offset && typeof offset === 'object') { ctx = offset; offset = 0; }
+    var startOffset = parseInt(offset, 10);
+    if (isNaN(startOffset) || startOffset < 0) startOffset = 0;
     var fullUrl = this._absUrl(chapterUrl);
     var res = await this._safeFetch(fullUrl, ctx, 'فشل جلب صفحة الفصل');
     if (!res.ok) throw new Error('فشل جلب صفحة الفصل: ' + res.status);
     var props = this._rspcProps(res.text || '');
-    if (!props) return { count: 0, comments: [] };
+    if (!props) return { count: 0, comments: [], nextOffset: startOffset, hasMore: false };
     var referer = fullUrl;
 
-    // Parse initial page for thread containers (replies loaded lazily)
-    var initialThreads = this._rspcThreadContainers(res.text || '');
-
-    var first = await this._rspcLoadPage(props, 0, 'latest', ctx, referer);
-    if (!first) return { count: 0, comments: [] };
-    var total = parseInt(first.total, 10);
-    if (isNaN(total) || total < 0) total = 0;
-    var pages = [first.html || ''];
-    var firstThreads = this._rspcThreadContainers(first.html || '');
-    for (var ft = 0; ft < firstThreads.length; ft++) initialThreads.push(firstThreads[ft]);
-    var offset = parseInt(first.newOffset, 10) || 0;
-    var hasMore = !!first.hasMore;
-    var guard = 0;
+    var pageHtmls = [];
+    var replyCounts = this._rspcReplyCounts(res.text || '');
+    var total = 0;
+    var off = startOffset;
+    var hasMore = false;
     // Sequential + paced: this Madara fork throttles parallel admin-ajax
     // bursts from one client (403s) — same rule as the chapter crawler.
-    while (hasMore && guard < 4) {
-      guard++;
-      await _sleep(250 + Math.floor(Math.random() * 250));
-      var pg = await this._rspcLoadPage(props, offset, 'latest', ctx, referer);
+    for (var p = 0; p < 5; p++) {
+      if (p > 0) await _sleep(250 + Math.floor(Math.random() * 250));
+      var pg = await this._rspcLoadPage(props, off, 'latest', ctx, referer);
       if (!pg) break;
-      pages.push(pg.html || '');
-      // Also check AJAX pages for thread containers
-      var moreThreads = this._rspcThreadContainers(pg.html || '');
-      for (var t = 0; t < moreThreads.length; t++) initialThreads.push(moreThreads[t]);
-      offset = parseInt(pg.newOffset, 10) || offset;
+      pageHtmls.push(pg.html || '');
+      var rc = this._rspcReplyCounts(pg.html || '');
+      for (var k in rc) {
+        if (Object.prototype.hasOwnProperty.call(rc, k)) replyCounts[k] = rc[k];
+      }
+      var t = parseInt(pg.total, 10);
+      if (!isNaN(t) && t >= 0) total = t;
+      var next = parseInt(pg.newOffset, 10);
+      off = isNaN(next) ? off : next;
       hasMore = !!pg.hasMore;
+      if (!hasMore) break;
     }
-    if (ctx && ctx.log) ctx.log('info', 'cenele: loaded', pages.length, 'comment page(s)');
+    if (ctx && ctx.log) ctx.log('info', 'cenele: loaded', pageHtmls.length, 'comment page(s) from offset', startOffset);
     var comments = [];
-    for (var i = 0; i < pages.length; i++) {
-      this._parseRspcPage(pages[i], fullUrl, comments);
+    for (var i = 0; i < pageHtmls.length; i++) {
+      this._parseRspcPage(pageHtmls[i], fullUrl, comments);
     }
-
-    // Fetch lazy reply threads (rspc_load_thread), mirroring the site's own
-    // front.js: {parent_id, level, root_id} → single-shot {html}.
-    // Level-1 containers are discovered in the chapter page + load_more HTML;
-    // level-2 (nested) containers are discovered inside fetched thread HTML.
-    var threadQueue = initialThreads.slice();
-    var seenThreads = {};
-    var threadCount = 0;
-    while (threadQueue.length && threadCount < 12) {
-      var th = threadQueue.shift();
-      var key = th.parentId + ':' + th.level;
-      if (seenThreads[key] || th.loaded) continue;
-      seenThreads[key] = true;
-      threadCount++;
-      if (threadCount > 1) await _sleep(200 + Math.floor(Math.random() * 200));
-      var threadPage = await this._rspcLoadThread(props, th.parentId, th.level, th.rootId, ctx, referer);
-      if (!threadPage || !threadPage.html) continue;
-      this._parseRspcThread(threadPage.html, fullUrl, th.parentId, comments);
-      var nested = this._rspcThreadContainers(threadPage.html);
-      for (var ni = 0; ni < nested.length; ni++) {
-        if (!nested[ni].loaded) {
-          nested[ni].rootId = th.rootId; // nested replies belong to the top root
-          threadQueue.push(nested[ni]);
-        }
+    var byId = {};
+    for (var c = 0; c < comments.length; c++) byId[comments[c].id] = comments[c];
+    for (var pid in replyCounts) {
+      if (Object.prototype.hasOwnProperty.call(replyCounts, pid) && byId[pid]) {
+        byId[pid].repliesTotal = replyCounts[pid];
       }
     }
-    if (threadCount && ctx && ctx.log) ctx.log('info', 'cenele: loaded', threadCount, 'reply thread(s)');
-
     comments.sort(function (a, b) { return a.createdAt - b.createdAt; });
     if (!total) total = comments.length;
-    return { count: total, comments: comments };
+    return { count: total, comments: comments, nextOffset: off, hasMore: hasMore };
+  },
+
+  // Fetch ONE reply thread on demand (collapsed-replies UI), mirroring the
+  // site's own front.js: {parent_id, level, root_id} → single-shot {html}.
+  // Level is derived: rootId given and different from parentId → level 2,
+  // otherwise level 1. Returns a flat {comments} list (host nests via
+  // parentId); nested unloaded toggles surface as repliesTotal for deeper
+  // expansion.
+  getCommentReplies: async function (chapterUrl, parentId, rootId, ctx) {
+    if (rootId && typeof rootId === 'object') { ctx = rootId; rootId = null; }
+    var pid = String(parentId || '').replace(/\D/g, '');
+    if (!pid) throw new Error('معرف التعليق مطلوب');
+    var root = String(rootId || '').replace(/\D/g, '') || pid;
+    var level = (root !== pid) ? 2 : 1;
+    var fullUrl = this._absUrl(chapterUrl);
+    var res = await this._safeFetch(fullUrl, ctx, 'فشل جلب صفحة الفصل');
+    if (!res.ok) throw new Error('فشل جلب صفحة الفصل: ' + res.status);
+    var props = this._rspcProps(res.text || '');
+    if (!props) return { comments: [] };
+    var thread = await this._rspcLoadThread(props, pid, level, root, ctx, fullUrl);
+    if (!thread || !thread.html) return { comments: [] };
+    var comments = [];
+    if (level === 1) {
+      this._parseRspcThread(thread.html, fullUrl, pid, comments);
+    } else {
+      var spans = this._rspcCardSpans(thread.html, 'rspc-subreply');
+      for (var i = 0; i < spans.length; i++) {
+        var node = this._rspcNode(spans[i].id, thread.html.slice(spans[i].start, spans[i].end), pid, 'rspc-subreply', fullUrl);
+        if (node) comments.push(node);
+      }
+      if (!spans.length) this._parseRspcThread(thread.html, fullUrl, pid, comments);
+    }
+    var counts = this._rspcReplyCounts(thread.html);
+    var byId = {};
+    for (var c = 0; c < comments.length; c++) byId[comments[c].id] = comments[c];
+    for (var k in counts) {
+      if (Object.prototype.hasOwnProperty.call(counts, k) && byId[k]) byId[k].repliesTotal = counts[k];
+    }
+    comments.sort(function (a, b) { return a.createdAt - b.createdAt; });
+    return { comments: comments };
   },
 
   postComment: async function () {

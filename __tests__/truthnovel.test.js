@@ -46,7 +46,7 @@ describe("site:truthnovel extension", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.1.10");
+    expect(ext.version).toBe("1.1.11");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -252,6 +252,69 @@ describe("site:truthnovel extension", () => {
     expect(res.comments[0].chapterTitle).toBe("2432 -قرار روبين");
     expect(res.comments[0].chapterUrl).toBe("https://truthnovel.top/2432-decision/");
     expect(res.comments[0].body).toBe("تعليق تجريبي رائع …");
+  });
+
+  it("quotes the parent comment inside reply cards", async () => {
+    const mockComments = [
+      {
+        id: 60197,
+        post: 11060,
+        parent: 60185,
+        author_name: "السائل عن الجن",
+        date: "2026-09-22T23:00:00",
+        content: { rendered: "<p>رد تجريبي</p>\n" },
+        _embedded: {
+          up: [
+            {
+              id: 11060,
+              title: { rendered: "2455 &#8211;عنوان الفصل" },
+              link: "https://truthnovel.top/2455-x/"
+            }
+          ]
+        }
+      },
+      {
+        id: 60190,
+        post: 11060,
+        parent: 0,
+        author_name: "السائل عن الجن",
+        date: "2026-09-22T22:00:00",
+        content: { rendered: "<p>تعليق أساسي</p>\n" },
+        _embedded: {
+          up: [
+            {
+              id: 11060,
+              title: { rendered: "2455 &#8211;عنوان الفصل" },
+              link: "https://truthnovel.top/2455-x/"
+            }
+          ]
+        }
+      }
+    ];
+    const parentJson = {
+      id: 60185,
+      author_name: "القارئ الأصلي",
+      content: { rendered: "<p>التعليق الأصلي &#8220;مقتبس&#8221;</p>" }
+    };
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/comments?search=": () => ({
+        status: 200,
+        ok: true,
+        headers: { "x-wp-total": "2", "x-wp-totalpages": "1" },
+        text: JSON.stringify(mockComments)
+      }),
+      "include=60185": ok(JSON.stringify([parentJson]))
+    });
+
+    const res = await ext.getAuthorComments("السائل عن الجن", 1, ctx);
+    const reply = res.comments.find((c) => c.id === "60197");
+    expect(reply.parentId).toBe("60185");
+    expect(reply.replyToAuthor).toBe("القارئ الأصلي");
+    expect(reply.replyToBody).toBe("التعليق الأصلي “مقتبس”");
+    // Top-level comment carries no quote
+    const top = res.comments.find((c) => c.id === "60190");
+    expect(top.parentId).toBeUndefined();
+    expect(top.replyToBody).toBeUndefined();
   });
 
   it("prefers RSS feed exact times over homepage day-level dates", async () => {

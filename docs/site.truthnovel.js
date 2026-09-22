@@ -25,7 +25,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.1.10",
+  version: "1.1.11",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -802,7 +802,7 @@ registerExtension({
 
       var chapterUrl = (c.link ? c.link.split("#")[0] : "") || postInfo.link || "";
 
-      comments.push({
+      var entry = {
         id: String(c.id),
         body: body,
         createdAt: dateMs,
@@ -810,8 +810,51 @@ registerExtension({
         chapterTitle: postInfo.title || ("الفصل " + (c.post || "")),
         chapterUrl: chapterUrl,
         images: images.length > 0 ? images.slice(0, 4) : undefined
-      });
+      };
+      // WP REST parent id (0 = top-level). Kept so the host can show the
+      // original comment inside reply cards; resolved below.
+      var pId = parseInt(c.parent, 10);
+      if (!isNaN(pId) && pId > 0) entry.parentId = String(pId);
+      comments.push(entry);
     }
+
+    // Resolve reply parents: ONE batched request (include=) for all unique
+    // parents instead of N sequential fetches, so reply cards can quote the
+    // original. Capped at 10 parents; failures are non-fatal (reply just
+    // shows without the quote).
+    try {
+      var parentIds = [];
+      for (var qi = 0; qi < comments.length; qi++) {
+        var qpid = comments[qi].parentId;
+        if (qpid && parentIds.indexOf(qpid) === -1 && parentIds.length < 10) parentIds.push(qpid);
+      }
+      if (parentIds.length > 0) {
+        var parentMap = {};
+        try {
+          var qpRes = await _fetchCachedPage(self._absUrl("/wp-json/wp/v2/comments?include=" + parentIds.join(",") + "&_fields=id,author_name,content&per_page=100"), ctx);
+          if (qpRes && qpRes.ok && qpRes.text) {
+            var qpList = JSON.parse(qpRes.text);
+            if (!Array.isArray(qpList)) qpList = [];
+            for (var qj = 0; qj < qpList.length; qj++) {
+              var qp = qpList[qj];
+              if (qp && qp.id) {
+                parentMap[String(qp.id)] = {
+                  author: cleanText(qp.author_name) || "—",
+                  body: cleanText(qp.content && qp.content.rendered ? qp.content.rendered : "")
+                };
+              }
+            }
+          }
+        } catch (qe) { /* non-fatal: skip quotes */ }
+        for (var qk = 0; qk < comments.length; qk++) {
+          var qInfo = comments[qk].parentId && parentMap[comments[qk].parentId];
+          if (qInfo && (qInfo.body || qInfo.author)) {
+            comments[qk].replyToAuthor = qInfo.author;
+            if (qInfo.body) comments[qk].replyToBody = qInfo.body;
+          }
+        }
+      }
+    } catch (qe2) { /* non-fatal: keep comments without quotes */ }
 
     // Fetch chapter pages to extract real wpDiscuz likes
     var uniqueChapterUrls = [];

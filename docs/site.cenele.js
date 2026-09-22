@@ -61,7 +61,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.11.0',
+  version: '1.11.1',
   apiVersion: 2,
   baseUrl: 'https://cenele.com',
 
@@ -602,6 +602,7 @@ registerExtension({
     var body = panelMatch[1]
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
       .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<div[^>]*class="[^"]*nhv-reader-promo[^"]*"[^>]*>[\s\S]*?<\/a>\s*<\/div>/gi, '')
       .replace(/<figure[^>]*data-nosnippet[^>]*>[\s\S]*?<\/figure>/gi, '')
       .replace(/<figure[^>]*class="[^"]*r[0-9a-f]{12,}[^"]*"[^>]*>[\s\S]*?<\/figure>/gi, '')
       .replace(/<blockquote[^>]*>[\s\S]*?<\/blockquote>/gi, '')
@@ -616,6 +617,7 @@ registerExtension({
       var text = this._decodeEntities(this._stripTags(bm[1]));
       if (!text) continue;
       if (/هذا التطبيق يسرق|يسرق من موقع/.test(text)) continue;
+      if (/Google Play|تطبيق فضاء الروايات الرسمي|حمّل التطبيق لقراءة أسرع|حمله من هنا من غوغل بلاي|بدون انترنات|لمتابعة المانهوا/.test(text)) continue;
       if (/^(نهاية الفصل|تم الفصل|الفصل التالي|انتهى الفصل|النهاية|تمت)/.test(text)) break;
       if (/^[-ـ—_]{3,}$/.test(text)) continue;
       if (/^بسم الله/.test(text)) continue;

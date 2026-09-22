@@ -25,7 +25,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.1.9",
+  version: "1.1.10",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -486,7 +486,7 @@ registerExtension({
       var id = idM[1];
       var authorM = item.match(/<dc:creator><!\[CDATA\[([\s\S]*?)\]\]><\/dc:creator>/i)
         || item.match(/<dc:creator>([\s\S]*?)<\/dc:creator>/i);
-      var author = authorM ? this._stripTags(authorM[1]).trim() || "—" : "—";
+      var author = authorM ? this._decodeEntities(this._stripTags(authorM[1])).trim() || "—" : "—";
       var dateM = item.match(/<pubDate>([\s\S]*?)<\/pubDate>/i);
       var createdAt = dateM ? Date.parse(dateM[1].trim()) : NaN;
       if (isNaN(createdAt)) createdAt = Date.now();
@@ -704,6 +704,7 @@ registerExtension({
   // Author comments across all chapters (WP REST API)
   // ---------------------------------------------------------------
   getAuthorComments: async function (authorName, page, ctx) {
+    var self = this;
     var name = (authorName || "").trim();
     if (!name) return { authorName: "", totalComments: 0, totalLikes: 0, comments: [], hasMore: false };
     var pageNum = typeof page === "number" && page >= 1 ? page : 1;
@@ -740,17 +741,7 @@ registerExtension({
     var cleanText = function (html) {
       if (!html) return "";
       var stripped = html.replace(/<[^>]+>/g, " ");
-      return stripped
-        .replace(/&amp;/g, "&")
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&quot;/g, '"')
-        .replace(/&#039;/g, "'")
-        .replace(/&#8230;/g, "…")
-        .replace(/&#8217;/g, "'")
-        .replace(/&#8216;/g, "'")
-        .replace(/&#8220;/g, '"')
-        .replace(/&#8221;/g, '"')
+      return self._decodeEntities(stripped)
         .replace(/\s+/g, " ")
         .trim();
     };

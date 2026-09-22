@@ -27,7 +27,7 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:kolnovel'));
   it('has correct name', () => expect(ext.name).toBe('كول نوفيل'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.6.0'));
+  it('has correct version', () => expect(ext.version).toBe('1.7.0'));
   it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://kolnovel.com'));
 
@@ -35,7 +35,7 @@ describe('Extension metadata', () => {
     const required = [
       'parseNovelInfo', 'parseChapterList', 'parseChapterContent',
       'searchNovels', 'getPopularNovels', 'getCategories', 'getCategoryNovels',
-      'fetchLatestChapters', 'getComments', 'postComment', 'voteComment',
+      'fetchLatestChapters', 'getComments', 'getCommentCount', 'postComment', 'voteComment',
     ];
     for (const m of required) {
       expect(typeof ext[m]).toBe('function');
@@ -992,6 +992,24 @@ describe('getComments', () => {
     const ctx = mockCtx({ 'no-comments/': ok('<html><body>no tag</body></html>') });
     const res = await ext.getComments('https://kolnovel.com/no-comments/', ctx);
     expect(res).toEqual({ count: 0, comments: [] });
+  });
+
+  it('getCommentCount returns ensure count without fetching records', async () => {
+    let recordsHit = false;
+    const ctx = mockCtx({
+      'ch-test-291266/': ok(CHAPTER_HTML),
+      'entities/ensure': ok(ENSURE),
+      'collections/comments/records': () => { recordsHit = true; return ok('{}'); },
+      'collections/comment_net/records': () => { recordsHit = true; return ok('{}'); }
+    });
+    const res = await ext.getCommentCount('https://kolnovel.com/ch-test-291266/', ctx);
+    expect(res).toEqual({ count: 2 });
+    expect(recordsHit).toBe(false);
+  });
+
+  it('getCommentCount returns 0 when chapter has no comment tag', async () => {
+    const ctx = mockCtx({ 'no-comments/': ok('<html><body>no tag</body></html>') });
+    await expect(ext.getCommentCount('https://kolnovel.com/no-comments/', ctx)).resolves.toEqual({ count: 0 });
   });
 
   it('falls back to normalizedContent when Lexical parse fails', async () => {

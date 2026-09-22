@@ -5,7 +5,7 @@ registerExtension({
   id: 'site:kolnovel',
   name: 'كول نوفيل',
   lang: 'ar',
-  version: '1.6.0',
+  version: '1.7.0',
   apiVersion: 2,
   baseUrl: 'https://kolnovel.com',
 
@@ -874,14 +874,10 @@ registerExtension({
     }
   },
 
-  getComments: async function (chapterUrl, ctx) {
-    var fullUrl = this._absUrl(chapterUrl);
-    var pageRes = await this._safeFetch(fullUrl, ctx, 'فشل جلب صفحة الفصل');
-    if (!pageRes.ok) throw new Error('فشل جلب صفحة الفصل: ' + pageRes.status);
-    var tag = this._cmtTag(pageRes.text || '');
-    if (!tag) return { count: 0, comments: [] };
-
-    var ensure = await this._cmtJson(this._cmtApi + '/api/kol/entities/ensure', ctx, 'فشل تجهيز التعليقات', {
+  // Shared entity-ensure step: chapter page tag -> PocketBase entity UUID
+  // (+ commentsCount). Used by both getComments and getCommentCount.
+  _cmtEnsure: async function (fullUrl, tag, ctx) {
+    return this._cmtJson(this._cmtApi + '/api/kol/entities/ensure', ctx, 'فشل تجهيز التعليقات', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -893,6 +889,29 @@ registerExtension({
         wpSeriesId: tag.wpSeriesId
       })
     });
+  },
+
+  // Count-only fast path for the reader badge: page + ensure POST carry
+  // commentsCount — no records/net fetches, no comment parsing.
+  getCommentCount: async function (chapterUrl, ctx) {
+    var fullUrl = this._absUrl(chapterUrl);
+    var pageRes = await this._safeFetch(fullUrl, ctx, 'فشل جلب صفحة الفصل');
+    if (!pageRes.ok) throw new Error('فشل جلب عدد التعليقات: ' + pageRes.status);
+    var tag = this._cmtTag(pageRes.text || '');
+    if (!tag) return { count: 0 };
+    var ensure = await this._cmtEnsure(fullUrl, tag, ctx);
+    var total = ensure && ensure.commentsCount ? parseInt(ensure.commentsCount, 10) : 0;
+    return { count: isNaN(total) || total < 0 ? 0 : total };
+  },
+
+  getComments: async function (chapterUrl, ctx) {
+    var fullUrl = this._absUrl(chapterUrl);
+    var pageRes = await this._safeFetch(fullUrl, ctx, 'فشل جلب صفحة الفصل');
+    if (!pageRes.ok) throw new Error('فشل جلب صفحة الفصل: ' + pageRes.status);
+    var tag = this._cmtTag(pageRes.text || '');
+    if (!tag) return { count: 0, comments: [] };
+
+    var ensure = await this._cmtEnsure(fullUrl, tag, ctx);
     var pbId = ensure && ensure.id;
     if (!pbId) return { count: 0, comments: [] };
     var total = ensure.commentsCount || 0;

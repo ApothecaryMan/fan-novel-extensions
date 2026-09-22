@@ -58,7 +58,7 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:cenele'));
   it('has correct name', () => expect(ext.name).toBe('فضاء الروايات'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.11.1'));
+  it('has correct version', () => expect(ext.version).toBe('1.12.0'));
   it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://cenele.com'));
 
@@ -67,7 +67,7 @@ describe('Extension metadata', () => {
       'parseNovelInfo', 'parseChapterList', 'parseChapterContent',
       'searchNovels', 'getPopularNovels',
       'getCategories', 'getCategoryNovels', 'fetchLatestChapters',
-      'getComments', 'getCommentReplies', 'postComment', 'voteComment',
+      'getComments', 'getCommentCount', 'getCommentReplies', 'postComment', 'voteComment',
     ];
     required.forEach((m) => expect(typeof ext[m]).toBe('function'));
   });
@@ -547,6 +547,28 @@ describe('getComments (RSP)', () => {
     const img = res.comments.find((c) => c.id === '103');
     expect(img.images).toEqual(['https://cenele.com/wp-content/uploads/pic.jpg']);
     expect(typeof res.comments[0].createdAt).toBe('number');
+  });
+
+  it('getCommentCount returns the load_more total without parsing comments', async () => {
+    let loadMoreCalls = 0;
+    const ctx = mockCtx({
+      'ch-test-40/': ok(CHAPTER_HTML),
+      'admin-ajax.php': (url, init) => {
+        loadMoreCalls += 1;
+        const body = String((init && init.body) || '');
+        expect(body).toContain('action=rspc_load_more');
+        expect(body).toContain('offset=0');
+        return ok(JSON.stringify({ success: true, data: { html: '', total: 42, newOffset: 0, hasMore: false } }));
+      }
+    });
+    const res = await ext.getCommentCount('https://cenele.com/ch-test-40/', ctx);
+    expect(res).toEqual({ count: 42 });
+    expect(loadMoreCalls).toBe(1);
+  });
+
+  it('getCommentCount returns 0 when the chapter has no rspc-wrap', async () => {
+    const ctx = mockCtx({ 'no-rspc/': ok('<html><body>no comments here</body></html>') });
+    await expect(ext.getCommentCount('https://cenele.com/no-rspc/', ctx)).resolves.toEqual({ count: 0 });
   });
 
   it('returns empty when the chapter has no rspc-wrap', async () => {

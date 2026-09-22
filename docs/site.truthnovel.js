@@ -25,7 +25,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.1.12",
+  version: "1.2.0",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -571,6 +571,27 @@ registerExtension({
     comments.sort(function (a, b) { return a.createdAt - b.createdAt; });
     if (!count) count = comments.length;
     return { count: count, comments: comments };
+  },
+
+  // ---------------------------------------------------------------
+  // Count-only fast path for the reader badge: the chapter page already
+  // embeds "commentCount" — no feed fetch, no comment parsing. Falls back
+  // to counting feed items when the page marker is absent.
+  // ---------------------------------------------------------------
+  getCommentCount: async function (chapterUrl, ctx) {
+    var fullUrl = this._absUrl(chapterUrl);
+    try {
+      var pageRes = await ctx.xFetch(fullUrl);
+      if (pageRes && pageRes.ok && pageRes.text) {
+        var cc = pageRes.text.match(/"commentCount"\s*:\s*(\d+)/);
+        if (cc) return { count: parseInt(cc[1], 10) };
+      }
+    } catch (e) { /* fall through to feed */ }
+    var feedUrl = fullUrl.replace(/\/?$/, "/") + "feed/";
+    var feedRes = await ctx.xFetch(feedUrl);
+    if (!feedRes.ok) throw new Error("فشل جلب عدد التعليقات: " + feedRes.status);
+    var n = ((feedRes.text || "").match(/<item>/gi) || []).length;
+    return { count: n };
   },
 
   // ---------------------------------------------------------------

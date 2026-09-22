@@ -61,7 +61,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.11.1',
+  version: '1.12.0',
   apiVersion: 2,
   baseUrl: 'https://cenele.com',
 
@@ -1127,6 +1127,21 @@ registerExtension({
     comments.sort(function (a, b) { return a.createdAt - b.createdAt; });
     if (!total) total = comments.length;
     return { count: total, comments: comments, nextOffset: off, hasMore: hasMore };
+  },
+
+  // Count-only fast path for the reader badge: ONE load_more page (its
+  // `total` field) instead of the up-to-5-page chunked comment crawl.
+  // No comment HTML is parsed.
+  getCommentCount: async function (chapterUrl, ctx) {
+    var fullUrl = this._absUrl(chapterUrl);
+    var res = await this._safeFetch(fullUrl, ctx, 'فشل جلب صفحة الفصل');
+    if (!res.ok) throw new Error('فشل جلب عدد التعليقات: ' + res.status);
+    var props = this._rspcProps(res.text || '');
+    if (!props) return { count: 0 };
+    var pg = await this._rspcLoadPage(props, 0, 'latest', ctx, fullUrl);
+    if (!pg) return { count: 0 };
+    var t = parseInt(pg.total, 10);
+    return { count: isNaN(t) || t < 0 ? 0 : t };
   },
 
   // Fetch ONE reply thread on demand (collapsed-replies UI), mirroring the

@@ -46,7 +46,7 @@ describe("site:truthnovel extension", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.1.12");
+    expect(ext.version).toBe("1.2.0");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -127,6 +127,27 @@ describe("site:truthnovel extension", () => {
     expect(res.comments[1].images).toEqual(["https://truthnovel.top/wp-content/uploads/pic.jpg", "https://truthnovel.top/wp-content/uploads/2026/09/attach.gif"]);
     expect(res.comments[0].likes).toBe(11);
     expect(res.comments[1].images).toContain("https://truthnovel.top/wp-content/uploads/2026/09/attach.gif");
+  });
+
+  it("getCommentCount reads the page marker without fetching the feed", async () => {
+    let feedHit = false;
+    const ctx = mockCtx({
+      "2430-x": ok('<script type="application/ld+json">{"@type":"Article","commentCount":7}</script>'),
+      "feed/": () => { feedHit = true; return ok("<rss></rss>"); }
+    });
+    const res = await ext.getCommentCount("https://truthnovel.top/2430-x/", ctx);
+    expect(res).toEqual({ count: 7 });
+    expect(feedHit).toBe(false);
+  });
+
+  it("getCommentCount falls back to counting feed items", async () => {
+    const ctx = mockCtx({
+      "2431-x": (url) => url.includes("feed/")
+        ? ok("<rss><channel><item>a</item><item>b</item><item>c</item></channel></rss>")
+        : ok("<html><body>no marker here</body></html>")
+    });
+    const res = await ext.getCommentCount("https://truthnovel.top/2431-x/", ctx);
+    expect(res).toEqual({ count: 3 });
   });
 
   it("posts top-level comment via wpdGetNonce + wpdAddComment protocol", async () => {

@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1790111706041,
+  "generatedAt": 1790112905634,
   "extensions": [
     {
       "id": "site:cenele",
       "name": "فضاء الروايات",
       "lang": "ar",
-      "version": "1.11.1",
+      "version": "1.12.0",
       "apiVersion": 2,
-      "size": 54305,
-      "sha256": "8097821625b6c38847108ab0c7b030be2556081f8f2d8f24a386f73bcc5d762d",
+      "size": 55042,
+      "sha256": "5b383b4ecbc41014613aa054b62892043e42ad0f220b7def1900503c8fb9b7b9",
       "url": "site.cenele.js",
       "baseUrl": "https://cenele.com",
       "icon": "icons/cenele.png"
@@ -30,10 +30,10 @@
       "id": "site:kolnovel",
       "name": "كول نوفيل",
       "lang": "ar",
-      "version": "1.6.0",
+      "version": "1.7.0",
       "apiVersion": 2,
-      "size": 43605,
-      "sha256": "1d4f19e631f84f29c0c3c919fe27d971c28cf68fdb9c76da01574a80ea4c3965",
+      "size": 44582,
+      "sha256": "bb83c91fbc190d6b341b433e048302fcf3560db4d349f3e400ca778b8fadcf96",
       "url": "site.kolnovel.js",
       "baseUrl": "https://kolnovel.com",
       "icon": "icons/kolnovel.png"
@@ -65,10 +65,10 @@
       "id": "site:truthnovel",
       "name": "رواية سيد الحقيقة",
       "lang": "ar",
-      "version": "1.1.12",
+      "version": "1.2.0",
       "apiVersion": 2,
-      "size": 40086,
-      "sha256": "8a5ff64be2991cfc7fdf6d0a22d40086e98414b0a5a088b542fc64e3d6e44c8c",
+      "size": 41117,
+      "sha256": "26bd0ec95db7f334da263e7ba6d1f39b361d425c1f321646220101794682217e",
       "url": "site.truthnovel.js",
       "baseUrl": "https://truthnovel.top"
     },
@@ -97,5 +97,5 @@
       "icon": "icons/wuxiaworld.png"
     }
   ],
-  "signature": "u_5PKosKN2uia_nbGnKBZY1x80RxATA8fTOgRX8ofzYdTKOkEx_h5-miAtG5b5u_AbJI80I9VtkSRXGT_xx2Cg"
+  "signature": "Hi0z2Ly6PYS-JexYHA1sfK4iHogefOHRzOE7TseJ3nZfzxXwJpjgXAacsSP9lbbv3XvrYAobJ86kbwysW2KHDQ"
 }

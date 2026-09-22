@@ -7,6 +7,13 @@
 var _htmlCache = {};
 var _CACHE_TTL_MS = 10 * 60 * 1000;
 
+// Total-views state (module cache, lives while the runtime is alive):
+// post IDs + summed views. Cold fill crawls tiny _fields=id REST pages;
+// warm refreshes resolve ONLY new chapters from the chapter feed.
+var _viewsIds = [];
+var _viewsTotal = 0;
+var _viewsFilled = false;
+
 function _fetchCachedPage(url, ctx) {
   var now = Date.now();
   var hit = _htmlCache[url];
@@ -25,7 +32,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.2.0",
+  version: "1.3.0",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -182,12 +189,125 @@ registerExtension({
 
   _coverUrl: "https://truthnovel.top/wp-content/uploads/2024/12/%D9%86%D8%B3%D8%AE%D8%A9-%D8%A7%D9%84%D9%81%D8%B5%D9%84-%D8%A7%D9%84%D9%81-%D8%A7%D9%84%D8%B5%D8%BA%D9%8A%D8%B1%D8%A9-%D9%84%D9%84%D9%85%D9%88%D9%82%D8%B9-%D8%A7%D9%84%D8%B9%D8%B1%D8%A8%D9%8A.jpg",
 
+  // Bounded-concurrency pool: run async jobs `limit` at a time so the
+  // cold views crawl stays fast without hammering the server.
+  _poolAll: async function (items, limit, fn) {
+    var out = new Array(items.length);
+    var next = 0;
+    async function worker() {
+      while (next < items.length) {
+        var i = next++;
+        out[i] = await fn(items[i], i);
+      }
+    }
+    var workers = [];
+    var n = Math.min(limit > 0 ? limit : 1, items.length);
+    for (var w = 0; w < n; w++) workers.push(worker());
+    await Promise.all(workers);
+    return out;
+  },
+
+  // Sum views for post IDs via the bulk counter endpoint (200 IDs/request).
+  _viewsSumIds: async function (ids, ctx) {
+    var self = this;
+    if (!ids || !ids.length) return 0;
+    var chunks = [];
+    for (var i = 0; i < ids.length; i += 200) chunks.push(ids.slice(i, i + 200));
+    var parts = await self._poolAll(chunks, 8, async function (ch) {
+      try {
+        var r = await ctx.xFetch(self._absUrl("/wp-json/post-views-counter/get-post-views/" + ch.join(",")));
+        if (!r || !r.ok || !r.text) return 0;
+        var n = parseInt(String(r.text).replace(/[^\d]/g, ""), 10);
+        return isNaN(n) || n < 0 ? 0 : n;
+      } catch (e) { return 0; }
+    });
+    var sum = 0;
+    for (var k = 0; k < parts.length; k++) sum += parts[k] || 0;
+    return sum;
+  },
+
+  // All chapter post IDs via tiny _fields=id REST pages (~1KB each),
+  // fetched in parallel waves of 8. Stops at the first short page;
+  // no header parsing needed. A failed page aborts (caller treats the
+  // whole count as unavailable rather than reporting a wrong total).
+  _viewsAllIds: async function (ctx) {
+    var self = this;
+    var ids = [];
+    var page = 1;
+    var done = false;
+    while (!done) {
+      var batch = [];
+      for (var p = page; p < page + 8; p++) batch.push(p);
+      var pages = await self._poolAll(batch, 8, async function (pg) {
+        var r = await ctx.xFetch(self._absUrl("/wp-json/wp/v2/posts?per_page=100&_fields=id&orderby=id&order=asc&page=" + pg));
+        if (!r || !r.ok || !r.text) return null;
+        try {
+          var arr = JSON.parse(r.text);
+          return Array.isArray(arr) ? arr : null;
+        } catch (e) { return null; }
+      });
+      for (var b = 0; b < pages.length; b++) {
+        var arr = pages[b];
+        if (!arr) throw new Error("فشل جلب معرفات الفصول");
+        for (var i = 0; i < arr.length; i++) {
+          if (arr[i] && arr[i].id) ids.push(String(arr[i].id));
+        }
+        if (arr.length < 100) { done = true; break; }
+      }
+      page += 8;
+      if (page > 101) break; // sanity cap (~8k posts)
+    }
+    return ids;
+  },
+
+  // Total novel views via the post-views-counter bulk endpoint.
+  // Cold: crawl IDs once + batched sums (all tiny JSON, ~30KB total),
+  // then cache for the runtime lifetime. Warm: ONE chapter-feed fetch
+  // resolves only chapters published since (their ?p= IDs) and adds
+  // their views — old-chapter view growth refreshes on the next cold
+  // fill (runtime restart).
+  getTotalViews: async function (novelUrl, ctx) {
+    var self = this;
+    if (!_viewsFilled) {
+      var ids = await self._viewsAllIds(ctx);
+      var total = await self._viewsSumIds(ids, ctx);
+      _viewsIds = ids;
+      _viewsTotal = total;
+      _viewsFilled = true;
+      return { count: total };
+    }
+    var seen = {};
+    for (var s = 0; s < _viewsIds.length; s++) seen[_viewsIds[s]] = true;
+    var fresh = [];
+    try {
+      // Shared 10-min page cache with parseChapterList (it fetches this same
+      // feed for dates) — a warm refresh right after opening chapters often
+      // costs zero requests.
+      var feed = await _fetchCachedPage(self._absUrl("/feed/"), ctx);
+      if (feed && feed.ok && feed.text) {
+        var m;
+        var re = /[?&]p=(\d+)/g;
+        while ((m = re.exec(feed.text)) !== null) {
+          if (!seen[m[1]] && fresh.indexOf(m[1]) === -1) {
+            seen[m[1]] = true;
+            fresh.push(m[1]);
+          }
+        }
+      }
+    } catch (e) { /* treat as no new chapters */ }
+    if (!fresh.length) return { count: _viewsTotal };
+    var add = await self._viewsSumIds(fresh, ctx);
+    _viewsTotal += add;
+    _viewsIds = _viewsIds.concat(fresh);
+    return { count: _viewsTotal };
+  },
+
   // ---------------------------------------------------------------
-  // Metadata for the single novel
+  // Metadata for the single novel (views filled when computable)
   // ---------------------------------------------------------------
   parseNovelInfo: async function (url, ctx) {
     var novelUrl = this._absUrl("/?w4pl=257");
-    return {
+    var info = {
       source: this.id,
       url: novelUrl,
       title: "سيد الحقيقة",
@@ -198,6 +318,12 @@ registerExtension({
       category: "فانتازيا",
       tags: ["فانتازيا", "خيال علمي", "مغامرة", "أكشن"]
     };
+    // Total views are best-effort: never break the novel page if counting fails.
+    try {
+      var total = await this.getTotalViews(novelUrl, ctx);
+      if (total && total.count > 0) info.readersCount = String(total.count);
+    } catch (e) { /* keep info without views */ }
+    return info;
   },
 
   // ---------------------------------------------------------------

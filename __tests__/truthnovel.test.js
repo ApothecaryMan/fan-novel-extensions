@@ -46,7 +46,7 @@ describe("site:truthnovel extension", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.2.0");
+    expect(ext.version).toBe("1.3.0");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -148,6 +148,80 @@ describe("site:truthnovel extension", () => {
     });
     const res = await ext.getCommentCount("https://truthnovel.top/2431-x/", ctx);
     expect(res).toEqual({ count: 3 });
+  });
+
+  it("getTotalViews cold-fills from tiny id pages + bulk sums", async () => {
+    const fresh = loadExtension("site.truthnovel.js");
+    let postsHits = 0;
+    let sumHits = 0;
+    const ids100 = [];
+    for (let i = 1; i <= 100; i += 1) ids100.push({ id: 1000 + i });
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/posts": (url) => {
+        postsHits += 1;
+        const pg = Number((url.match(/page=(\d+)/) || [])[1] || 1);
+        // Full first page, short second → one parallel wave of 8, then stop.
+        return ok(JSON.stringify(pg === 1 ? ids100 : [{ id: 2001 }, { id: 2002 }]));      },
+      "get-post-views/": () => {
+        sumHits += 1;
+        return ok("1500");
+      }
+    });
+    const res = await fresh.getTotalViews("https://truthnovel.top/?w4pl=257", ctx);
+    expect(res).toEqual({ count: 1500 });
+    expect(postsHits).toBe(8); // one wave of 8, stops at the short page 2
+    expect(sumHits).toBe(1); // one bulk sum, no per-chapter fetches
+  });
+
+  it("getTotalViews warm refresh adds only new feed chapters", async () => {
+    const fresh = loadExtension("site.truthnovel.js");
+    let postsHits = 0;
+    let feedHits = 0;
+    const seenSums = [];
+    // Feed already lists 103, but the cold crawl only knows 101+102.
+    const feed = "<rss><channel><guid>https://truthnovel.top/?p=101</guid>" +
+      "<guid>https://truthnovel.top/?p=102</guid>" +
+      "<guid>https://truthnovel.top/?p=103</guid></channel></rss>";
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/posts": () => {
+        postsHits += 1;
+        return ok(JSON.stringify([{ id: 101 }, { id: 102 }]));
+      },
+      "get-post-views/": (url) => {
+        seenSums.push(url);
+        return ok(url.includes("103") ? "60" : "1500");
+      },
+      "/feed/": () => {
+        feedHits += 1;
+        return ok(feed);
+      }
+    });
+    // Cold ignores the feed; warm detects 103 and sums only it.
+    await expect(fresh.getTotalViews("https://truthnovel.top/?w4pl=257", ctx)).resolves.toEqual({ count: 1500 });
+    await expect(fresh.getTotalViews("https://truthnovel.top/?w4pl=257", ctx)).resolves.toEqual({ count: 1560 });
+    expect(postsHits).toBe(8);
+    expect(seenSums.filter((u) => u.includes("103")).length).toBe(1);
+    // Third call: feed served from the shared page cache — zero new fetches.
+    await expect(fresh.getTotalViews("https://truthnovel.top/?w4pl=257", ctx)).resolves.toEqual({ count: 1560 });
+    expect(feedHits).toBe(1);
+    expect(postsHits).toBe(8);
+  });
+
+  it("parseNovelInfo exposes total views as readersCount", async () => {
+    const fresh = loadExtension("site.truthnovel.js");
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/posts": () => ok(JSON.stringify([{ id: 101 }])),
+      "get-post-views/": () => ok("777")
+    });
+    const info = await fresh.parseNovelInfo("https://truthnovel.top/?w4pl=257", ctx);
+    expect(info.readersCount).toBe("777");
+  });
+
+  it("parseNovelInfo still opens when views counting fails", async () => {
+    const fresh = loadExtension("site.truthnovel.js");
+    const info = await fresh.parseNovelInfo("https://truthnovel.top/?w4pl=257", mockCtx());
+    expect(info.title).toBe("سيد الحقيقة");
+    expect(info.readersCount).toBeUndefined();
   });
 
   it("posts top-level comment via wpdGetNonce + wpdAddComment protocol", async () => {

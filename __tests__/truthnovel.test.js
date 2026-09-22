@@ -46,7 +46,7 @@ describe("site:truthnovel extension", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.1.11");
+    expect(ext.version).toBe("1.1.12");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -315,6 +315,50 @@ describe("site:truthnovel extension", () => {
     const top = res.comments.find((c) => c.id === "60190");
     expect(top.parentId).toBeUndefined();
     expect(top.replyToBody).toBeUndefined();
+  });
+
+  it("merges page-only wmu attachments into profile comments", async () => {
+    // Feed content never carries wpDiscuz uploads — they live only in the
+    // chapter page HTML (data-comment-id). Regression: profile cards showed
+    // no images at all because only the feed was read.
+    const mockComments = [
+      {
+        id: 60202,
+        post: 11065,
+        parent: 0,
+        author_name: "اورابوراس",
+        date: "2026-09-22T19:56:42",
+        content: { rendered: "<p>قيصر وهو يسلك طريق التعالي…</p>" },
+        _embedded: {
+          up: [
+            {
+              id: 11065,
+              title: { rendered: "2456 -الكائنات" },
+              link: "https://truthnovel.top/2456-x/"
+            }
+          ]
+        }
+      }
+    ];
+    const chapterHtml =
+      `<div data-comment-id='60202'><div class='wmu-attached-images'>` +
+      `<a href='https://truthnovel.top/wp-content/uploads/2026/09/g.9.gif'>` +
+      `<img src='https://truthnovel.top/wp-content/uploads/2026/09/g.9.gif' /></a>` +
+      `</div></div><div id="comment-60202"></div>`;
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/comments?search=": () => ({
+        status: 200,
+        ok: true,
+        headers: { "x-wp-total": "1", "x-wp-totalpages": "1" },
+        text: JSON.stringify(mockComments)
+      }),
+      "https://truthnovel.top/2456-x/": ok(chapterHtml)
+    });
+
+    const res = await ext.getAuthorComments("اورابوراس", 1, ctx);
+    expect(res.comments[0].images).toEqual([
+      "https://truthnovel.top/wp-content/uploads/2026/09/g.9.gif"
+    ]);
   });
 
   it("prefers RSS feed exact times over homepage day-level dates", async () => {

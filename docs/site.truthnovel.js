@@ -25,7 +25,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.1.11",
+  version: "1.1.12",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -868,12 +868,39 @@ registerExtension({
     for (var u = 0; u < Math.min(uniqueChapterUrls.length, 10); u++) {
       var chUrl = uniqueChapterUrls[u];
       try {
-        var pageRes = await _fetchCachedPage(this._absUrl(chUrl), ctx);
+        var pageRes = await _fetchCachedPage(self._absUrl(chUrl), ctx);
         if (pageRes && pageRes.ok && pageRes.text) {
           var pageHtml = pageRes.text;
+          // wpDiscuz attachments (wmu-comment-attachments) are NOT in the
+          // REST feed — merge them from the page by data-comment-id so
+          // cards can show thumbs. Zero extra requests: these pages are
+          // already fetched for likes above.
+          var attachMap = {};
+          var attRe = /data-comment-id='(\d+)'/g;
+          var attM;
+          while ((attM = attRe.exec(pageHtml)) !== null) {
+            var aid = attM[1];
+            var awin = pageHtml.substr(attM.index, 4000);
+            var urls = awin.match(/https?:\/\/truthnovel\.top\/wp-content\/uploads\/[^'"()\s]+?\.(?:gif|jpe?g|png|webp|bmp)/gi);
+            if (urls) {
+              var uniq = [];
+              for (var ui = 0; ui < urls.length && uniq.length < 4; ui++) {
+                if (uniq.indexOf(urls[ui]) === -1) uniq.push(urls[ui]);
+              }
+              if (uniq.length > 0) attachMap[aid] = uniq;
+            }
+          }
           for (var ci = 0; ci < comments.length; ci++) {
             if (comments[ci].chapterUrl === chUrl) {
               var cid = comments[ci].id;
+              if (attachMap[cid]) {
+                var merged = (comments[ci].images || []).concat(attachMap[cid]);
+                var dedup = [];
+                for (var mi = 0; mi < merged.length && dedup.length < 4; mi++) {
+                  if (dedup.indexOf(merged[mi]) === -1) dedup.push(merged[mi]);
+                }
+                if (dedup.length > 0) comments[ci].images = dedup;
+              }
               var idx = pageHtml.indexOf('id="comment-' + cid + '"');
               if (idx !== -1) {
                 var window_ = pageHtml.substr(idx, 6000);

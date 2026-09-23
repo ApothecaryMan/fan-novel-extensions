@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { loadExtension, mockCtx, ok } from './helpers.js';
-import { CATALOG_PAGE, NOVEL_PAGE, CHAPTER_PAGE, SEARCH_PAGE } from './fixtures/hindawi.js';
+import { CATALOG_PAGE, NOVEL_PAGE, CHAPTER_PAGE, CHAPTER_PAGE_SOFT_WRAP, SEARCH_PAGE } from './fixtures/hindawi.js';
 
 let ext;
 
@@ -80,6 +80,34 @@ describe('Hindawi Parsing logic with fixtures', () => {
     expect(typeof text).toBe('string');
     expect(text).toContain('هيرفي جونكور');
     expect(text).not.toContain('<article');
+  });
+
+  it('does not repeat the chapter title at the start of the content', async () => {
+    const chUrl = 'https://www.safahat.org/books/25868315/1/';
+    const ctx = mockCtx({ [chUrl]: ok(CHAPTER_PAGE) });
+    const text = await ext.parseChapterContent(chUrl, ctx);
+
+    // In-content h1 duplicates the chapter title shown by the reader heading.
+    expect(text.startsWith('الحرير')).toBe(false);
+    // In-chapter section markers and body must be preserved.
+    expect(text).toContain('١');
+    expect(text).toContain('رغم أن والده');
+  });
+
+  it('reflows soft wraps so sentences are not cut across lines', async () => {
+    const chUrl = 'https://www.safahat.org/books/25868315/2/';
+    const ctx = mockCtx({ [chUrl]: ok(CHAPTER_PAGE_SOFT_WRAP) });
+    const text = await ext.parseChapterContent(chUrl, ctx);
+
+    // Single <br/> and raw source newlines inside one <p> join with a space.
+    expect(text).toContain('زاهرًا في الجيش، وكان يحلم');
+    expect(text).not.toMatch(/زاهرًا[^]*\n[^]*في الجيش/);
+    // Stanza breaks (<br/><br/>) stay as paragraph separators.
+    expect(text).toContain('بيت شعر أول\n\nبيت شعر ثانٍ');
+    // No single-\n fragments remain inside a paragraph (reader splits on \n).
+    for (const para of text.split('\n\n')) {
+      expect(para).not.toContain('\n');
+    }
   });
 
   it('parses search results correctly', async () => {

@@ -51,6 +51,9 @@ describe('Shamela Parsing logic with fixtures', () => {
     expect(info.category).toBe('علوم القرآن وأصول التفسير');
     expect(info.status).toBe('مكتملة');
     expect(info.totalChapters).toBe(5);
+    // Reading-time estimate: 196 printed pages × ~300 words ÷ 140 wpm.
+    expect(info.wordCount).toBe(196 * 300);
+    expect(info.readingMinutes).toBe(Math.max(1, Math.round(196 * 300 / 140)));
   });
 
   it('dedupes repeated pageIds in chapter list', async () => {

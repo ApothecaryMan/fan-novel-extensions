@@ -68,6 +68,10 @@ export const NOVEL_PAGE = `<!DOCTYPE html>
 
 export const CHAPTER_PAGE = `<!DOCTYPE html>
 <html>
+<head>
+  <title>الحرير | أليساندرو باريكو | مؤسسة هنداوي</title>
+  <meta property="og:title" content="الحرير | أليساندرو باريكو | مؤسسة هنداوي" />
+</head>
 <body>
   <article class="chapterContent">
     <div dir="rtl">
@@ -77,6 +81,23 @@ export const CHAPTER_PAGE = `<!DOCTYPE html>
         <p>رغم أن والده كان قد تصور له مستقبلًا زاهرًا في الجيش...</p>
         <p>كان «هيرفي جونكور» يشتري ويبيع دود الحرير لكي يكسب عيشه.</p>
       </div>
+    </div>
+  </article>
+</body>
+</html>`;
+
+export const CHAPTER_PAGE_SOFT_WRAP = `<!DOCTYPE html>
+<html>
+<head>
+  <title>الحرير | أليساندرو باريكو | مؤسسة هنداوي</title>
+</head>
+<body>
+  <article class="chapterContent">
+    <div dir="rtl">
+      <h1 dir="rtl" class="title center">الحرير</h1>
+      <p>رغم أن والده كان قد تصور له مستقبلًا زاهرًا<br/>في الجيش، وكان يحلم له بالرتب العالية
+      والمناصب الكبيرة في المستقبل.</p>
+      <p>بيت شعر أول<br/><br/>بيت شعر ثانٍ</p>
     </div>
   </article>
 </body>

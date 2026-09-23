@@ -1,6 +1,6 @@
 // @id       site:hindawi
 // @name     مؤسسة هنداوي
-// @version  1.1.2
+// @version  1.1.3
 // @lang     ar
 // @apiVersion 1
 // @baseUrl  https://www.safahat.org
@@ -54,7 +54,7 @@ registerExtension({
   id: 'site:hindawi',
   name: 'مؤسسة هنداوي',
   lang: 'ar',
-  version: '1.1.2',
+  version: '1.1.3',
   apiVersion: 1,
   baseUrl: 'https://www.safahat.org',
 
@@ -179,17 +179,29 @@ registerExtension({
 
   _cleanInline: function (html) {
     if (!html) return '';
-    var s = String(html).replace(/<br\s*\/?>/gi, '\n');
-    s = s.replace(/<\/(?:li|tr|ul|ol)>/gi, '\n');
+    var s = String(html);
+    // Paragraph separator placeholder (survives tag-stripping below).
+    var SEP = '\uE000';
+    // Real stanza breaks: two or more consecutive <br> = paragraph break.
+    s = s.replace(/(?:\s*<br\s*\/?>\s*){2,}/gi, SEP);
+    // A single <br> inside a paragraph is a soft print-layout wrap
+    // (or a raw source newline) — reflow it with a space so sentences
+    // are not cut across lines in the reader.
+    s = s.replace(/<br\s*\/?>/gi, ' ');
+    s = s.replace(/<\/(?:li|tr|ul|ol|div|p|h1|h2|h3|h4|h5|h6)>/gi, SEP);
     s = s.replace(/<[^>]+>/g, ' ');
     s = this._decodeEntities(s);
-    var lines = s.split('\n');
+    // Literal newlines in the HTML source are formatting whitespace, not content breaks.
+    s = s.replace(/[\r\n]+/g, ' ');
+    var parts = s.split(SEP);
     var out = [];
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i].replace(/\s+/g, ' ').trim();
-      if (line) out.push(line);
+    for (var i = 0; i < parts.length; i++) {
+      var part = parts[i].replace(/\s+/g, ' ').trim();
+      if (part) out.push(part);
     }
-    return out.join('\n');
+    // One <p> = one logical paragraph (internal wraps reflowed).
+    // Stanza breaks (from <br><br>) stay as paragraph separators.
+    return out.join('\n\n');
   },
 
   // ---------------------------------------------------------------
@@ -359,23 +371,45 @@ registerExtension({
     content = content.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
     content = content.replace(/<div[^>]*class="[^"]*(?:download-icons|shareActions|pages)[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '');
 
-    // Extract all paragraphs and headers in order (preserve <br/> verse breaks)
+    // Extract all paragraphs and headers in order (soft <br/> wraps reflowed inside _cleanInline)
     var paragraphs = [];
-    var pRegex = /<(?:p|h1|h2|h3|h4|h5|h6)[^>]*>([\s\S]*?)<\/(?:p|h1|h2|h3|h4|h5|h6)>/gi;
+    var pRegex = /<(p|h1|h2|h3|h4|h5|h6)[^>]*>([\s\S]*?)<\/(?:p|h1|h2|h3|h4|h5|h6)>/gi;
     var pm;
     while ((pm = pRegex.exec(content)) !== null) {
-      var text = this._cleanInline(pm[1]).trim();
+      var text = this._cleanInline(pm[2]).trim();
       if (!text) continue;
-      // Skip duplicate book-wide titles repeating at the start if it matches standard title
-      paragraphs.push(text);
+      paragraphs.push({ tag: pm[1].toLowerCase(), text: text });
+    }
+
+    // Drop a leading chapter-level heading (h1/h2/h3) that repeats the page's
+    // own title: the reader already renders the chapter title above the body,
+    // so keeping it would show the title twice.
+    if (paragraphs.length > 0) {
+      var titleCandidates = Object.create(null);
+      var ogT = html.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i);
+      var docT = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+      [ogT && ogT[1], docT && docT[1]].forEach(function (raw) {
+        if (!raw) return;
+        var first = String(raw).split('|')[0].replace(/\s+/g, ' ').trim();
+        if (first) titleCandidates[first] = true;
+      });
+      while (paragraphs.length > 0) {
+        var head = paragraphs[0];
+        if ((head.tag === 'h1' || head.tag === 'h2' || head.tag === 'h3') && titleCandidates[head.text]) {
+          paragraphs.shift();
+        } else {
+          break;
+        }
+      }
     }
 
     if (paragraphs.length === 0) {
-      var fallback = String(content).replace(/<br\s*\/?>/gi, '\n');
-      return this._decodeEntities(this._stripTags(fallback)).replace(/\n\s*\n/g, '\n\n').trim();
+      // No <p>/<h*> blocks (e.g. div-soup markup): run the whole content
+      // through the same reflowing cleaner so soft wraps never cut sentences.
+      return this._cleanInline(content).trim();
     }
 
-    return paragraphs.join('\n\n');
+    return paragraphs.map(function (p) { return p.text; }).join('\n\n');
   },
 
   // ---------------------------------------------------------------

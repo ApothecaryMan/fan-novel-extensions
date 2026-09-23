@@ -1,6 +1,6 @@
 // @id       site:shamela
 // @name     المكتبة الشاملة
-// @version  1.1.0
+// @version  1.1.1
 // @lang     ar
 // @apiVersion 1
 // @baseUrl  https://shamela.ws
@@ -56,7 +56,7 @@ registerExtension({
   id: 'site:shamela',
   name: 'المكتبة الشاملة',
   lang: 'ar',
-  version: '1.1.0',
+  version: '1.1.1',
   apiVersion: 1,
   baseUrl: 'https://shamela.ws',
 
@@ -258,6 +258,16 @@ registerExtension({
       if (n > 0) pages = n;
     }
 
+    // Reading-time estimate from the published printed-page count (zero extra
+    // fetches; full-book stitching would cost hundreds of requests).
+    // ~300 words per Arabic printed page, ~140 wpm deliberate reading speed.
+    var wordCount = undefined;
+    var readingMinutes = undefined;
+    if (pages) {
+      wordCount = pages * 300;
+      readingMinutes = Math.max(1, Math.round(wordCount / 140));
+    }
+
     return {
       source: this.id,
       url: fullUrl,
@@ -269,7 +279,9 @@ registerExtension({
       category: category,
       tags: category !== 'كتب وروايات' ? [category] : [],
       totalChapters: totalChapters || undefined,
-      totalPages: pages
+      totalPages: pages,
+      wordCount: wordCount,
+      readingMinutes: readingMinutes
     };
   },
 

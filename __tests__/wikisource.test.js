@@ -56,6 +56,9 @@ describe('Wikisource Parsing logic with fixtures', () => {
     expect(info.status).toBe('مكتملة');
     expect(info.totalChapters).toBe(2);
     expect(info.summary).toContain('كليلة ودمنة');
+    // Reading-time fields present (root-page word count ÷ 140 wpm).
+    expect(info.wordCount).toBeGreaterThan(0);
+    expect(info.readingMinutes).toBe(Math.max(1, Math.round(info.wordCount / 140)));
   });
 
   it('lists subpages as chapters without splitting small pages', async () => {

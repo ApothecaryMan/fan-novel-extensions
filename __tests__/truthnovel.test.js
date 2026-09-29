@@ -46,7 +46,7 @@ describe("site:truthnovel extension", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.4.0");
+    expect(ext.version).toBe("1.5.0");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -62,21 +62,80 @@ describe("site:truthnovel extension", () => {
     expect(info.coverUrl).toContain("truthnovel.top/wp-content/uploads/");
   });
 
-  it("parses chapters, sorts ascending, and populates uploadedAt", async () => {
+  it("builds the chapter list from REST, with each chapter's real date", async () => {
+    // Primary path. Every chapter gets the site's own `date_gmt` — the old
+    // implementation downloaded an 18.9 MB RSS feed for this and INTERPOLATED
+    // dates for anything the feed did not cover.
+    const fresh = loadExtension("site.truthnovel.js");
+    const posts = [
+      { id: 2, link: "https://truthnovel.top/1-genius/", title: { rendered: "1 &#8211; عبقري" }, date_gmt: "2024-02-25T10:00:00" },
+      { id: 9, link: "https://truthnovel.top/2422-game/", title: { rendered: "2422 &#8211; حب اللعبة لذاتها" }, date_gmt: "2026-09-12T08:30:00" }
+    ];
     const ctx = mockCtx({
-      "?w4pl=257": ok(SAMPLE_LIST_PAGE),
-      "https://truthnovel.top/": ok(SAMPLE_HOME_PAGE)
+      "/wp-json/wp/v2/posts?per_page=100": () => ok(JSON.stringify(posts))
     });
-    const chapters = await ext.parseChapterList("https://truthnovel.top/?w4pl=257", ctx);
+    const chapters = await fresh.parseChapterList("https://truthnovel.top/?w4pl=257", ctx);
     expect(chapters.length).toBe(2);
     expect(chapters[0].number).toBe(1);
     expect(chapters[0].title).toBe("الفصل 1 - عبقري");
-    expect(typeof chapters[0].uploadedAt).toBe("number");
+    expect(chapters[0].url).toBe("https://truthnovel.top/1-genius/");
+    // The site's timestamp, not a guess.
+    expect(chapters[0].uploadedAt).toBe(Date.parse("2024-02-25T10:00:00Z"));
 
     expect(chapters[1].number).toBe(2422);
     expect(chapters[1].title).toBe("الفصل 2422 - حب اللعبة لذاتها");
-    expect(typeof chapters[1].uploadedAt).toBe("number");
     expect(chapters[1].uploadedAt).toBeGreaterThan(chapters[0].uploadedAt);
+  });
+
+  it("never invents a date for a chapter the site did not date", async () => {
+    const fresh = loadExtension("site.truthnovel.js");
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/posts?per_page=100": () => ok(JSON.stringify([
+        { id: 2, link: "https://truthnovel.top/1-genius/", title: { rendered: "1 - عبقري" } }
+      ]))
+    });
+    const chapters = await fresh.parseChapterList("https://truthnovel.top/?w4pl=257", ctx);
+    expect(chapters).toHaveLength(1);
+    expect(chapters[0].uploadedAt).toBeUndefined();
+  });
+
+  it("falls back to the HTML list page when REST is unavailable", async () => {
+    // Deliberate safety net: if the site ever disables the REST API, the
+    // chapters must still load. Dates are absent in this path — that is the
+    // accepted trade, because the alternative was refetching the 18.9 MB feed.
+    const fresh = loadExtension("site.truthnovel.js");
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/posts": () => ok("[]"),
+      "?w4pl=257": ok(SAMPLE_LIST_PAGE)
+    });
+    const chapters = await fresh.parseChapterList("https://truthnovel.top/?w4pl=257", ctx);
+    expect(chapters.length).toBe(2);
+    expect(chapters[0].number).toBe(1);
+    expect(chapters[0].title).toBe("الفصل 1 - عبقري");
+    expect(chapters[1].number).toBe(2422);
+    expect(chapters[1].title).toBe("الفصل 2422 - حب اللعبة لذاتها");
+  });
+
+  it("fetchLatestChapters reads ONE descending page instead of the whole list", async () => {
+    // The old implementation called the full parseChapterList — the entire
+    // 19.6 MB crawl — and discarded everything but the newest chapters.
+    const fresh = loadExtension("site.truthnovel.js");
+    let pages = 0;
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/posts?per_page=100": (url) => {
+        pages += 1;
+        if (!url.includes("order=desc")) throw new Error("must page newest-first");
+        // Newest first: 2469 and 2468 are new, 2467 is already known.
+        return ok(JSON.stringify([
+          { id: 3, link: "https://truthnovel.top/2469-x/", title: { rendered: "2469 - إستهزاء" }, date_gmt: "2026-09-29T18:53:37" },
+          { id: 2, link: "https://truthnovel.top/2468-x/", title: { rendered: "2468 - 제목" }, date_gmt: "2026-09-28T18:53:37" },
+          { id: 1, link: "https://truthnovel.top/2467-x/", title: { rendered: "2467 - known" }, date_gmt: "2026-09-27T18:53:37" }
+        ]));
+      }
+    });
+    const latest = await fresh.fetchLatestChapters("https://truthnovel.top/?w4pl=257", 2467, ctx);
+    expect(latest.map((c) => c.number)).toEqual([2468, 2469]);
+    expect(pages).toBe(1);
   });
 
   it("parses chapter content and properly cleans entity codes like &#8230; and ;8230#", async () => {
@@ -130,14 +189,24 @@ describe("site:truthnovel extension", () => {
   });
 
   it("getCommentCount reads the page marker without fetching the feed", async () => {
+    // Fresh instance: the page now goes through the shared HTML cache, so a
+    // shared one would see a page cached by an earlier test.
+    const fresh = loadExtension("site.truthnovel.js");
     let feedHit = false;
+    let pageHits = 0;
     const ctx = mockCtx({
-      "2430-x": ok('<script type="application/ld+json">{"@type":"Article","commentCount":7}</script>'),
+      "2430-x": () => {
+        pageHits += 1;
+        return ok('<script type="application/ld+json">{"@type":"Article","commentCount":7}</script>');
+      },
       "feed/": () => { feedHit = true; return ok("<rss></rss>"); }
     });
-    const res = await ext.getCommentCount("https://truthnovel.top/2430-x/", ctx);
+    const res = await fresh.getCommentCount("https://truthnovel.top/2430-x/", ctx);
     expect(res).toEqual({ count: 7 });
     expect(feedHit).toBe(false);
+    // The reason for the cache: the same 221 KB page is not downloaded twice.
+    await fresh.getCommentCount("https://truthnovel.top/2430-x/", ctx);
+    expect(pageHits).toBe(1);
   });
 
   it("getCommentCount falls back to counting feed items", async () => {
@@ -173,18 +242,21 @@ describe("site:truthnovel extension", () => {
     expect(sumHits).toBe(1); // one bulk sum, no per-chapter fetches
   });
 
-  it("getTotalViews warm refresh adds only new feed chapters", async () => {
+  it("getTotalViews warm refresh adds only genuinely new posts", async () => {
     const fresh = loadExtension("site.truthnovel.js");
-    let postsHits = 0;
+    let ascHits = 0;
+    let descHits = 0;
     let feedHits = 0;
     const seenSums = [];
-    // Feed already lists 103, but the cold crawl only knows 101+102.
-    const feed = "<rss><channel><guid>https://truthnovel.top/?p=101</guid>" +
-      "<guid>https://truthnovel.top/?p=102</guid>" +
-      "<guid>https://truthnovel.top/?p=103</guid></channel></rss>";
+    // The cold crawl (ascending) only knows 101+102. The warm pass looks at the
+    // newest page and finds 103, which is the only one worth summing.
     const ctx = mockCtx({
-      "/wp-json/wp/v2/posts": () => {
-        postsHits += 1;
+      "/wp-json/wp/v2/posts": (url) => {
+        if (url.includes("order=desc")) {
+          descHits += 1;
+          return ok(JSON.stringify([{ id: 103 }, { id: 102 }, { id: 101 }]));
+        }
+        ascHits += 1;
         return ok(JSON.stringify([{ id: 101 }, { id: 102 }]));
       },
       "get-post-views/": (url) => {
@@ -193,18 +265,20 @@ describe("site:truthnovel extension", () => {
       },
       "/feed/": () => {
         feedHits += 1;
-        return ok(feed);
+        return ok("<rss></rss>");
       }
     });
-    // Cold ignores the feed; warm detects 103 and sums only it.
+    // Cold: crawl ids, sum both.
     await expect(fresh.getTotalViews("https://truthnovel.top/?w4pl=257", ctx)).resolves.toEqual({ count: 1500 });
+    // Warm: one descending page finds 103 and sums only it.
     await expect(fresh.getTotalViews("https://truthnovel.top/?w4pl=257", ctx)).resolves.toEqual({ count: 1560 });
-    expect(postsHits).toBe(8);
+    expect(ascHits).toBe(8);
     expect(seenSums.filter((u) => u.includes("103")).length).toBe(1);
-    // Third call: feed served from the shared page cache — zero new fetches.
+    // Third call: nothing new, so no further work at all.
     await expect(fresh.getTotalViews("https://truthnovel.top/?w4pl=257", ctx)).resolves.toEqual({ count: 1560 });
-    expect(feedHits).toBe(1);
-    expect(postsHits).toBe(8);
+    expect(descHits).toBe(2);
+    // The 18.9 MB site-wide feed is no longer part of this path at all.
+    expect(feedHits).toBe(0);
   });
 
   it("parseNovelInfo exposes total views as readersCount", async () => {
@@ -608,41 +682,33 @@ describe("site:truthnovel extension", () => {
     ]);
   });
 
-  it("prefers RSS feed exact times over homepage day-level dates", async () => {
-    const list = `
-<div id="w4pl-inner-257" class="w4pl-inner"><ul>
-<li><a class="post_title w4pl_post_title" href="https://truthnovel.top/2444-x/">2444 -التفاوض مع طاغوت</a></li>
-<li><a class="post_title w4pl_post_title" href="https://truthnovel.top/2445-x/">2445 -عرض للطاغوت</a></li>
-<li><a class="post_title w4pl_post_title" href="https://truthnovel.top/1-genius/" title="View 1 -عبقري">1 -عبقري</a></li>
-</ul></div>`;
-    const home = `
-<div class="bs-blog-post">
-<h4 class="title"><a href="https://truthnovel.top/2445-x/">2445 -عرض للطاغوت</a></h4>
-<div class="bs-blog-meta"><span class="bs-blog-date"><a href="https://truthnovel.top/2026/09/"><time datetime="">16 سبتمبر، 2026</time></a></span></div>
-</div>
-<div class="bs-blog-post">
-<h4 class="title"><a href="https://truthnovel.top/2444-x/">2444 -التفاوض مع طاغوت</a></h4>
-<div class="bs-blog-meta"><span class="bs-blog-date"><a href="https://truthnovel.top/2026/09/"><time datetime="">16 سبتمبر، 2026</time></a></span></div>
-</div>`;
-    const feed = `<?xml version="1.0"?><rss><channel>
-<item><title>2444 -التفاوض مع طاغوت</title><link>https://truthnovel.top/2444-x/</link><pubDate>Wed, 16 Sep 2026 13:02:07 +0000</pubDate></item>
-<item><title>2445 -عرض للطاغوت</title><link>https://truthnovel.top/2445-x/</link><pubDate>Wed, 16 Sep 2026 19:15:57 +0000</pubDate></item>
-</channel></rss>`;
-    const ctx = mockCtx({
-      "?w4pl=257": ok(list),
-      "/feed/": ok(feed),
-      "https://truthnovel.top/": ok(home)
-    });
+  it("dates every chapter from the site, including the oldest, and never the RSS feed", async () => {
+    // Replaces "prefers RSS feed exact times over homepage day-level dates".
+    // The 18.9 MB feed is gone entirely, and with it the interpolation that
+    // used to spread un-dated chapters across a date range.
     const fresh = loadExtension("site.truthnovel.js");
+    let feedHits = 0;
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/posts?per_page=100": () => ok(JSON.stringify([
+        { id: 1, link: "https://truthnovel.top/1-genius/", title: { rendered: "1 -عبقري" }, date_gmt: "2024-02-25T10:00:00" },
+        { id: 2, link: "https://truthnovel.top/2444-x/", title: { rendered: "2444 -التفاوض مع طاغوت" }, date_gmt: "2026-09-16T13:02:07" },
+        { id: 3, link: "https://truthnovel.top/2445-x/", title: { rendered: "2445 -عرض للطاغوت" }, date_gmt: "2026-09-16T19:15:57" }
+      ])),
+      "/feed/": () => { feedHits += 1; return ok("<rss></rss>"); },
+      "https://truthnovel.top/": ok("<html>homepage</html>")
+    });
     const chapters = await fresh.parseChapterList("https://truthnovel.top/?w4pl=257", ctx);
     const c44 = chapters.find((c) => c.number === 2444);
     const c45 = chapters.find((c) => c.number === 2445);
     const c1 = chapters.find((c) => c.number === 1);
-    expect(c44.uploadedAt).toBe(Date.parse("Wed, 16 Sep 2026 13:02:07 +0000"));
-    expect(c45.uploadedAt).toBe(Date.parse("Wed, 16 Sep 2026 19:15:57 +0000"));
+    expect(c44.uploadedAt).toBe(Date.parse("2026-09-16T13:02:07Z"));
+    expect(c45.uploadedAt).toBe(Date.parse("2026-09-16T19:15:57Z"));
     expect(c45.uploadedAt).toBeGreaterThan(c44.uploadedAt);
-    // Old chapter must not be stamped as today
+    // The invariant that used to need clamping: an old chapter must never be
+    // stamped as recent. It now has a real 2024 date.
+    expect(c1.uploadedAt).toBe(Date.parse("2024-02-25T10:00:00Z"));
     expect(c1.uploadedAt).toBeLessThan(c44.uploadedAt);
+    expect(feedHits).toBe(0);
   });
 
   it("parses Arabic relative times", async () => {

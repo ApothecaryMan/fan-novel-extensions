@@ -141,7 +141,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.4.0",
+  version: "1.5.0",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -389,19 +389,23 @@ registerExtension({
     for (var s = 0; s < _viewsIds.length; s++) seen[_viewsIds[s]] = true;
     var fresh = [];
     try {
-      // Shared 10-min page cache with parseChapterList (it fetches this same
-      // feed for dates) — a warm refresh right after opening chapters often
-      // costs zero requests.
-      var feed = await _fetchCachedPage(self._absUrl("/feed/"), ctx);
-      if (feed && feed.ok && feed.text) {
-        var m;
-        var re = /[?&]p=(\d+)/g;
-        while ((m = re.exec(feed.text)) !== null) {
-          if (!seen[m[1]] && fresh.indexOf(m[1]) === -1) {
-            seen[m[1]] = true;
-            fresh.push(m[1]);
-          }
+      // New posts are the highest ids, so ONE descending REST page finds any
+      // that appeared since the cold fill. This used to download the site-wide
+      // RSS feed — 18.9 MB, all 2,482 items — to regex out `?p=<id>` values,
+      // and after a cold fill that scan found nothing at all, because every id
+      // was already known. Paging continues only if the whole page is new.
+      var page = 1;
+      while (page < 20) {
+        var arr = await self._restPosts(page, "id", "desc", ctx);
+        if (!arr || !arr.length) break;
+        var allNew = true;
+        for (var i = 0; i < arr.length; i++) {
+          var id = String(arr[i].id);
+          if (!seen[id]) { seen[id] = true; fresh.push(id); }
+          else { allNew = false; }
         }
+        if (!allNew || arr.length < 100) break;
+        page++;
       }
     } catch (e) { /* treat as no new chapters */ }
     if (!fresh.length) return { count: _viewsTotal };
@@ -436,9 +440,153 @@ registerExtension({
   },
 
   // ---------------------------------------------------------------
-  // Chapter list — all 2,400+ chapters are on the list index page
+  // Chapter list
+  //
+  // PRIMARY: paginated WP REST. Every post carries id, title, link and an
+  // exact `date_gmt`, so the whole list is 25 small JSON pages (~570 KB) with
+  // REAL dates for all 2,400+ chapters.
+  //
+  // This replaced a path that downloaded the site-wide RSS feed — measured at
+  // 18.9 MB for 2,482 items — purely to read `pubDate` for recent chapters,
+  // then interpolated plausible-looking but false dates for everything older.
+  // The feed, the homepage date scrape, and the whole interpolation block are
+  // gone; REST is both smaller and strictly more accurate.
   // ---------------------------------------------------------------
+
+  /** One page of posts, or null on failure. */
+  _restPosts: async function (page, fields, order, ctx) {
+    var url = this._absUrl("/wp-json/wp/v2/posts?per_page=100&orderby=id&order="
+      + (order || "asc") + "&page=" + page + "&_fields=" + fields);
+    var r = await ctx.xFetch(url);
+    if (!r || !r.ok || !r.text) return null;
+    try {
+      var arr = JSON.parse(r.text);
+      return Array.isArray(arr) ? arr : null;
+    } catch (e) { return null; }
+  },
+
+  /**
+   * Every post, in waves of 8. Stops on the first short page, and uses
+   * `x-wp-totalpages` when available so it never probes past the end.
+   */
+  _allRestPosts: async function (fields, order, ctx) {
+    var self = this;
+    var first = await self._restPosts(1, fields, order, ctx);
+    if (!first || !first.length) return [];
+    var out = first.slice();
+    if (first.length < 100) return out;
+
+    // The total-pages header is the cheapest way to learn the page count.
+    // It is an optimisation only — without it we walk until a short page,
+    // which is the same rule _viewsAllIds already relies on.
+    var totalPages = 0;
+    try {
+      var probe = await ctx.xFetch(self._absUrl("/wp-json/wp/v2/posts?per_page=1&_fields=id"));
+      var hdr = probe && probe.headers
+        ? (probe.headers["x-wp-totalpages"] || probe.headers["X-WP-TotalPages"])
+        : null;
+      totalPages = hdr ? parseInt(hdr, 10) : 0;
+    } catch (e) { /* fine */ }
+
+    var next = 2;
+    while (next < 400) {
+      if (totalPages && next > totalPages) break;
+      var batch = [];
+      for (var p = next; p < next + 8; p++) batch.push(p);
+      if (totalPages && batch[0] > totalPages) break;
+      var pages = await self._poolAll(batch, 8, function (pg) {
+        return self._restPosts(pg, fields, order, ctx);
+      });
+      var short = false;
+      for (var i = 0; i < pages.length; i++) {
+        var arr = pages[i];
+        // A failed page must NOT silently truncate the list: to the app that is
+        // indistinguishable from chapters being deleted, and the refresh is
+        // append-only so they would never come back.
+        if (!arr) throw new Error("فشل جلب قائمة الفصول");
+        for (var j = 0; j < arr.length; j++) out.push(arr[j]);
+        if (arr.length < 100) { short = true; break; }
+      }
+      if (short) break;
+      next += 8;
+    }
+    return out;
+  },
+
+  /** A REST post row -> ChapterMeta. */
+  _postToChapter: function (post, index) {
+    var rawTitle = this._decodeEntities(this._stripTags(
+      (post.title && (post.title.rendered || post.title)) || ""
+    )).trim();
+    var numMatch = this._toLatinDigits(rawTitle).match(/^(\d+)/);
+    var num = numMatch ? parseInt(numMatch[1], 10) : 0;
+    var cleanTitle = rawTitle.replace(/^\d+\s*[-–:]\s*/, "").trim();
+    var ts = Date.parse(post.date_gmt ? post.date_gmt + "Z" : (post.date || ""));
+    var ch = {
+      url: this._absUrl(post.link || ""),
+      number: num,
+      title: "الفصل " + (num || index + 1) + (cleanTitle ? " - " + cleanTitle : "")
+    };
+    // The site's own timestamp, or nothing at all. Never invented: the old
+    // code spread un-dated chapters evenly across a date range, which put old
+    // chapters on confident but false dates.
+    if (!isNaN(ts) && ts > 0) ch.uploadedAt = ts;
+    return ch;
+  },
+
   parseChapterList: async function (novelUrl, ctx) {
+    var self = this;
+    var chapters = [];
+    try {
+      var posts = await self._allRestPosts("id,title,link,date_gmt", "asc", ctx);
+      for (var i = 0; i < posts.length; i++) chapters.push(self._postToChapter(posts[i], i));
+    } catch (e) {
+      chapters = [];
+    }
+    if (chapters.length) {
+      chapters.sort(function (a, b) { return (a.number || 0) - (b.number || 0); });
+      return chapters;
+    }
+    // FALLBACK, kept on purpose: the HTML index page. If the site ever disables
+    // the REST API, this regex still returns the full list, where a REST-only
+    // implementation would report no chapters at all.
+    return await self._chaptersFromListPage(ctx);
+  },
+
+  /**
+   * Incremental refresh. Used to call the full parseChapterList and throw away
+   * everything except the newest chapters — i.e. the "fast path" was paying the
+   * entire 19.6 MB crawl. New posts are the highest ids, so one descending page
+   * normally covers the gap; further pages are only fetched if the caller is
+   * more than 100 chapters behind.
+   */
+  fetchLatestChapters: async function (novelUrl, knownCount, ctx) {
+    var self = this;
+    var found = [];
+    var page = 1;
+    while (page < 400) {
+      // Page 1 is fetched ALONE, not as part of a parallel wave. The common case
+      // is "a few new chapters at most", so a wave of speculative pages would
+      // spend 4 requests to find out that 1 was enough. Further pages are only
+      // requested once a whole page has come back unknown, which only happens
+      // when the reader is genuinely far behind.
+      var first = await self._restPosts(page, "id,title,link,date_gmt", "desc", ctx);
+      if (!first) throw new Error("فشل جلب أحدث الفصول");
+      var reachedKnown = false;
+      var allNew = true;
+      for (var i = 0; i < first.length; i++) {
+        var ch = self._postToChapter(first[i], found.length);
+        if (ch.number <= knownCount) { reachedKnown = true; allNew = false; break; }
+        found.push(ch);
+      }
+      if (reachedKnown || first.length < 100 || !allNew) break;
+      page++;
+    }
+    found.sort(function (a, b) { return (a.number || 0) - (b.number || 0); });
+    return found;
+  },
+
+  _chaptersFromListPage: async function (ctx) {
     var listUrl = this._absUrl("/?w4pl=257");
     var res = await _fetchCachedPage(listUrl, ctx);
     if (!res.ok) throw new Error("فشل جلب قائمة فصول سيد الحقيقة: " + res.status);
@@ -456,9 +604,7 @@ registerExtension({
       seen[chUrl] = true;
 
       var rawTitle = this._decodeEntities(this._stripTags(match[2])).trim();
-      var cleanDigits = this._toLatinDigits(rawTitle);
-
-      var numMatch = cleanDigits.match(/^(\d+)/);
+      var numMatch = this._toLatinDigits(rawTitle).match(/^(\d+)/);
       var chNum = numMatch ? parseInt(numMatch[1], 10) : 0;
       var cleanTitle = rawTitle.replace(/^\d+\s*[-–:]\s*/, "").trim();
 
@@ -491,122 +637,7 @@ registerExtension({
     chapters.sort(function (a, b) {
       return (a.number || 0) - (b.number || 0);
     });
-
-    // Populate uploadedAt
-    // 1) Homepage gives day-level dates (no time). 2) RSS feed gives
-    // exact pubDate per recent chapter. Feed wins when both exist.
-    var self = this;
-    var dateMap = {};
-    var feedMap = {};
-    var feedNums = {};
-    try {
-      var homeRes = await _fetchCachedPage(this._absUrl("/"), ctx);
-      if (homeRes && homeRes.ok && homeRes.text) {
-        var itemRegex = /<h4[^>]*class="title"[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<span[^>]*class="bs-blog-date"[^>]*>[\s\S]*?<time([^>]*)>([\s\S]*?)<\/time>/gi;
-        var im;
-        while ((im = itemRegex.exec(homeRes.text)) !== null) {
-          var itemUrl = this._absUrl(im[1].trim());
-          var timeAttrs = im[3] || "";
-          var dateText = this._stripTags(im[4]).trim();
-          var ts = undefined;
-          var dtm = timeAttrs.match(/datetime\s*=\s*"([^"]*)"/i);
-          if (dtm && dtm[1]) {
-            var isoTs = this._parseDate(dtm[1].trim());
-            if (isoTs) ts = isoTs;
-          }
-          if (!ts) ts = this._parseDate(dateText);
-          if (ts) {
-            dateMap[self._normUrl(itemUrl)] = ts;
-          }
-        }
-      }
-    } catch (e) {
-      // Non-fatal if homepage fails
-    }
-
-    try {
-      var feedRes = await _fetchCachedPage(this._absUrl("/feed/"), ctx);
-      if (feedRes && feedRes.ok && feedRes.text) {
-        var fItemRe = /<item>([\s\S]*?)<\/item>/gi;
-        var fm;
-        while ((fm = fItemRe.exec(feedRes.text)) !== null) {
-          var block = fm[1];
-          var linkM = block.match(/<link>([\s\S]*?)<\/link>/i);
-          var dateM = block.match(/<pubDate>([\s\S]*?)<\/pubDate>/i);
-          var titleM = block.match(/<title>([\s\S]*?)<\/title>/i);
-          if (!linkM || !dateM) continue;
-          var fUrl = linkM[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").trim();
-          var fTs = Date.parse(dateM[1].trim());
-          if (isNaN(fTs)) continue;
-          var norm = self._normUrl(fUrl);
-          feedMap[norm] = fTs;
-          dateMap[norm] = fTs;
-          if (titleM) {
-            var fTitle = self._toLatinDigits(self._stripTags(titleM[1]));
-            var fNumM = fTitle.match(/(\d+)/);
-            if (fNumM) feedNums[norm] = parseInt(fNumM[1], 10);
-          }
-        }
-      }
-    } catch (e2) {
-      // Non-fatal if feed fails
-    }
-
-    var startTs = 1708473600000; // 21 Feb 2024 (website launch)
-    var latestTs = 0;
-    for (var k in dateMap) {
-      if (dateMap[k] > latestTs) latestTs = dateMap[k];
-    }
-    if (!latestTs) latestTs = Date.now();
-
-    // Old chapters without exact dates interpolate below the oldest
-    // exact feed date, so they never show as "today".
-    var oldestFeedTs = 0;
-    var oldestFeedNum = 0;
-    for (var fk in feedMap) {
-      if (!oldestFeedTs || feedMap[fk] < oldestFeedTs) oldestFeedTs = feedMap[fk];
-    }
-    for (var fn in feedNums) {
-      if (!oldestFeedNum || feedNums[fn] < oldestFeedNum) oldestFeedNum = feedNums[fn];
-    }
-    var interpEnd = oldestFeedTs ? oldestFeedTs - 60000 : latestTs;
-    if (interpEnd < startTs) interpEnd = latestTs;
-
-    var maxChapterNum = chapters.length > 0 ? (chapters[chapters.length - 1].number || chapters.length) : 1;
-    var interpMaxNum = oldestFeedNum ? oldestFeedNum - 1 : maxChapterNum;
-
-    for (var i = 0; i < chapters.length; i++) {
-      var ch = chapters[i];
-      var normUrl = self._normUrl(ch.url);
-      if (dateMap[normUrl]) {
-        ch.uploadedAt = dateMap[normUrl];
-      } else if (maxChapterNum > 1 && ch.number) {
-        if (oldestFeedNum && ch.number >= oldestFeedNum) {
-          // Between oldest feed date and latest — should be rare since
-          // feed covers the newest items; clamp below latest.
-          ch.uploadedAt = Math.min(latestTs, interpEnd + 1);
-        } else {
-          var denom = Math.max(1, interpMaxNum - 1);
-          var ratio = Math.max(0, Math.min(1, (ch.number - 1) / denom));
-          ch.uploadedAt = Math.round(startTs + ratio * (interpEnd - startTs));
-        }
-      } else {
-        ch.uploadedAt = interpEnd;
-      }
-    }
-
     return chapters;
-  },
-
-  fetchLatestChapters: async function (novelUrl, knownCount, ctx) {
-    var all = await this.parseChapterList(novelUrl, ctx);
-    var latest = [];
-    for (var i = 0; i < all.length; i++) {
-      if (all[i].number > knownCount) {
-        latest.push(all[i]);
-      }
-    }
-    return latest;
   },
 
   // ---------------------------------------------------------------
@@ -693,7 +724,12 @@ registerExtension({
     var count = 0;
     var pageHtml = "";
     try {
-      var pageRes = await ctx.xFetch(fullUrl);
+      // Cached, not raw: the comment badge (getCommentCount) reads the SAME
+      // 221 KB page for a single integer. Fetching it twice per chapter cost
+      // ~443 KB; through the shared page cache the second read is free.
+      // Trade-off, stated plainly: vote counts and the badge can be up to
+      // _CACHE_TTL_MS stale instead of always-fresh.
+      var pageRes = await _fetchCachedPage(fullUrl, ctx);
       if (pageRes && pageRes.ok && pageRes.text) {
         pageHtml = pageRes.text;
         var cc = pageHtml.match(/"commentCount"\s*:\s*(\d+)/);
@@ -820,7 +856,10 @@ registerExtension({
   getCommentCount: async function (chapterUrl, ctx) {
     var fullUrl = this._absUrl(chapterUrl);
     try {
-      var pageRes = await ctx.xFetch(fullUrl);
+      // Shared cache: opening a chapter makes getComments pull this exact
+      // 221 KB page, so the badge is normally free instead of a second full
+      // download of the same bytes.
+      var pageRes = await _fetchCachedPage(fullUrl, ctx);
       if (pageRes && pageRes.ok && pageRes.text) {
         var cc = pageRes.text.match(/"commentCount"\s*:\s*(\d+)/);
         if (cc) return { count: parseInt(cc[1], 10) };

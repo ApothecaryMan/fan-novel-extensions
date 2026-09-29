@@ -42,11 +42,101 @@ beforeAll(() => {
 });
 
 describe("site:truthnovel extension", () => {
+  it("caches REST pages so a repeat full crawl costs nothing", async () => {
+    // Regression guard: _restPosts briefly used raw xFetch, which silently
+    // undid the caching the list always had — a second parseChapterList inside
+    // the TTL re-downloaded all 26 pages (593 KB).
+    const fresh = loadExtension("site.truthnovel.js");
+    let hits = 0;
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/posts?per_page=100": () => {
+        hits += 1;
+        return ok(JSON.stringify([{ id: 1, link: "https://truthnovel.top/1-x/", title: { rendered: "1 -أ" }, date_gmt: "2024-01-01T00:00:00" }]));
+      }
+    });
+    await fresh.parseChapterList("https://truthnovel.top/?w4pl=257", ctx);
+    const afterFirst = hits;
+    await fresh.parseChapterList("https://truthnovel.top/?w4pl=257", ctx);
+    expect(afterFirst).toBeGreaterThan(0);
+    expect(hits).toBe(afterFirst);
+  });
+
+  it("bounds the page cache instead of pinning every chapter forever", async () => {
+    // The comment reader pulls a ~225 KB page per chapter and the cache had no
+    // eviction at all, so 8 chapters already retained 2.2 MB for the whole
+    // session. 60 pages x 400 KB = 24 MB of input against a 12 MB ceiling, so
+    // the oldest must be gone and the newest must survive — that is LRU.
+    const fresh = loadExtension("site.truthnovel.js");
+    const big = (url) => '<script>{"commentCount":5}</script><p>' + "x".repeat(400 * 1024) + url + "</p>";
+    let n = 0;
+    const ctx = mockCtx({
+      "/ch-": (url) => { n += 1; return ok(big(url)); }
+    });
+    for (let i = 0; i < 60; i++) {
+      await fresh.getCommentCount("https://truthnovel.top/ch-" + i + "-x/", ctx);
+    }
+    expect(n).toBe(60);
+
+    // Oldest was evicted -> a real refetch.
+    n = 0;
+    await fresh.getCommentCount("https://truthnovel.top/ch-0-x/", ctx);
+    expect(n).toBe(1);
+
+    // Newest is still resident -> served from cache, no request.
+    n = 0;
+    await fresh.getCommentCount("https://truthnovel.top/ch-59-x/", ctx);
+    expect(n).toBe(0);
+  });
+
+  it("only returns the novel for a query that actually matches it", async () => {
+    const fresh = loadExtension("site.truthnovel.js");
+    const ctx = mockCtx();
+    expect(await fresh.searchNovels("سيد الحقيقة", 1, ctx)).toHaveLength(1);
+    expect(await fresh.searchNovels("truth", 1, ctx)).toHaveLength(1);
+    // Browse (empty query) always matches.
+    expect(await fresh.searchNovels("", 1, ctx)).toHaveLength(1);
+    // Previously EVERY query returned the novel, because both branches were
+    // byte-identical.
+    expect(await fresh.searchNovels("roman numerals cookbook", 1, ctx)).toHaveLength(0);
+  });
+
+  it("returns nothing for a category slug that does not exist", async () => {
+    const fresh = loadExtension("site.truthnovel.js");
+    const ctx = mockCtx();
+    expect(await fresh.getCategoryNovels("fantasy", 1, ctx)).toHaveLength(1);
+    expect(await fresh.getCategoryNovels("wrong-slug", 1, ctx)).toHaveLength(0);
+  });
+
+  it("never dates an undated comment as if it were just posted", async () => {
+    // The feed is chronological, so an item with no pubDate inherits the last
+    // good one. It used to be Date.now(), which pinned it to the present and
+    // sorted it as the newest comment on the chapter.
+    const fresh = loadExtension("site.truthnovel.js");
+    const feed = `<rss><channel>
+<item><link>https://truthnovel.top/c/#comment-1</link><dc:creator><![CDATA[a]]></dc:creator>
+<pubDate>Mon, 01 Jan 2024 10:00:00 +0000</pubDate>
+<content:encoded><![CDATA[<p>الأول</p>]]></content:encoded></item>
+<item><link>https://truthnovel.top/c/#comment-2</link><dc:creator><![CDATA[b]]></dc:creator>
+<content:encoded><![CDATA[<p>بلا تاريخ</p>]]></content:encoded></item>
+</channel></rss>`;
+    const ctx = mockCtx({
+      // Order matters: mockCtx is first-match-wins, and "/c/" is a substring
+      // of "/c/feed/".
+      "https://truthnovel.top/c/feed/": ok(feed),
+      "https://truthnovel.top/c/": ok('<script>{"commentCount":2}</script>')
+    });
+    const res = await fresh.getComments("https://truthnovel.top/c/", ctx);
+    const undated = res.comments.find((c) => c.id === "2");
+    expect(undated.createdAt).toBe(Date.parse("Mon, 01 Jan 2024 10:00:00 +0000"));
+    // Explicitly NOT "now".
+    expect(undated.createdAt).toBeLessThan(Date.now() - 86400000);
+  });
+
   it("has valid metadata", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.5.0");
+    expect(ext.version).toBe("1.6.0");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -274,9 +364,10 @@ describe("site:truthnovel extension", () => {
     await expect(fresh.getTotalViews("https://truthnovel.top/?w4pl=257", ctx)).resolves.toEqual({ count: 1560 });
     expect(ascHits).toBe(8);
     expect(seenSums.filter((u) => u.includes("103")).length).toBe(1);
-    // Third call: nothing new, so no further work at all.
+    // Third call: nothing new, and the descending page is served from the
+    // shared cache, so no request at all.
     await expect(fresh.getTotalViews("https://truthnovel.top/?w4pl=257", ctx)).resolves.toEqual({ count: 1560 });
-    expect(descHits).toBe(2);
+    expect(descHits).toBe(1);
     // The 18.9 MB site-wide feed is no longer part of this path at all.
     expect(feedHits).toBe(0);
   });

@@ -4,8 +4,34 @@
  * Dedicated to the single novel "سيد الحقيقة" by author Zeus.
  */
 
+// Page cache. BOUNDED, because it stores whole chapter pages: the comment
+// reader pulls a ~225 KB page per chapter, and an unbounded map pinned every
+// one of them for the whole session (8 chapters measured = 2.2 MB retained).
+// Eviction is least-recently-used, and a byte ceiling is enforced as well as a
+// count so a few enormous pages cannot blow past the limit on their own.
 var _htmlCache = {};
 var _CACHE_TTL_MS = 10 * 60 * 1000;
+var _CACHE_MAX_ENTRIES = 40;
+var _CACHE_MAX_BYTES = 12 * 1024 * 1024;
+var _CACHE_BYTES = 0;
+
+/** Drop the least-recently-used entries until both ceilings are satisfied. */
+function _evictCache() {
+  var keys = Object.keys(_htmlCache);
+  while (keys.length > _CACHE_MAX_ENTRIES || _CACHE_BYTES > _CACHE_MAX_BYTES) {
+    var oldestKey = null;
+    var oldestUsed = Infinity;
+    for (var i = 0; i < keys.length; i++) {
+      var e = _htmlCache[keys[i]];
+      if (!e) continue;
+      if (e.used < oldestUsed) { oldestUsed = e.used; oldestKey = keys[i]; }
+    }
+    if (!oldestKey) return;
+    _CACHE_BYTES -= _htmlCache[oldestKey].text.length;
+    delete _htmlCache[oldestKey];
+    keys = Object.keys(_htmlCache);
+  }
+}
 
 // wpDiscuz vote counts, keyed by comment id. NO TTL on purpose.
 //
@@ -127,11 +153,17 @@ function _fetchCachedPage(url, ctx) {
   var now = Date.now();
   var hit = _htmlCache[url];
   if (hit && now - hit.ts < _CACHE_TTL_MS) {
+    // Touch on read so eviction is genuinely least-recently-USED, not
+    // least-recently-written.
+    hit.used = now;
     return Promise.resolve({ ok: true, status: 200, text: hit.text });
   }
+  if (hit) _CACHE_BYTES -= hit.text.length;
   return ctx.xFetch(url).then(function (res) {
     if (res.ok && typeof res.text === "string") {
-      _htmlCache[url] = { text: res.text, ts: now };
+      _htmlCache[url] = { text: res.text, ts: now, used: now };
+      _CACHE_BYTES += res.text.length;
+      _evictCache();
     }
     return res;
   });
@@ -141,7 +173,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.5.0",
+  version: "1.6.0",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -453,11 +485,18 @@ registerExtension({
   // gone; REST is both smaller and strictly more accurate.
   // ---------------------------------------------------------------
 
-  /** One page of posts, or null on failure. */
+  /**
+   * One page of posts, or null on failure.
+   *
+   * Cached like every other page. It was briefly left on raw `ctx.xFetch`,
+   * which silently undid caching the list had always had: the old code read a
+   * 10-minute-cached list page and feed, so a second full crawl inside the TTL
+   * cost nothing, while this re-downloaded all 26 pages (593 KB) every time.
+   */
   _restPosts: async function (page, fields, order, ctx) {
     var url = this._absUrl("/wp-json/wp/v2/posts?per_page=100&orderby=id&order="
       + (order || "asc") + "&page=" + page + "&_fields=" + fields);
-    var r = await ctx.xFetch(url);
+    var r = await _fetchCachedPage(url, ctx);
     if (!r || !r.ok || !r.text) return null;
     try {
       var arr = JSON.parse(r.text);
@@ -683,32 +722,38 @@ registerExtension({
   // ---------------------------------------------------------------
   // Search & Browse — returns the single novel
   // ---------------------------------------------------------------
-  searchNovels: async function (query, page, ctx) {
-    if (page && page > 1) return [];
-    var novelUrl = this._absUrl("/?w4pl=257");
-    var q = (query || "").trim().toLowerCase();
 
-    if (q && q.indexOf("حقيق") === -1 && q.indexOf("سيد") === -1 && q.indexOf("truth") === -1) {
-      return [{
-        source: this.id,
-        url: novelUrl,
-        title: "سيد الحقيقة",
-        author: "Zeus",
-        coverUrl: this._coverUrl,
-        category: "فانتازيا",
-        status: "مستمرة"
-      }];
-    }
-
+  /** The one and only novel this source serves. */
+  _onlyNovel: function () {
     return [{
       source: this.id,
-      url: novelUrl,
+      url: this._absUrl("/?w4pl=257"),
       title: "سيد الحقيقة",
       author: "Zeus",
       coverUrl: this._coverUrl,
       category: "فانتازيا",
       status: "مستمرة"
     }];
+  },
+
+  /**
+   * This site hosts exactly one novel, so "search" is a match test rather than
+   * a query. It previously returned that novel for EVERY query — the two
+   * branches were byte-identical, so searching an unrelated word still produced
+   * a hit. An empty query is a browse, and always matches.
+   */
+  _novelMatches: function (query) {
+    var q = (query || "").trim().toLowerCase();
+    if (!q) return true;
+    return ["سيد", "حقيق", "truth", "zeus", "فانتازيا"].some(function (t) {
+      return q.indexOf(t) !== -1;
+    });
+  },
+
+  searchNovels: async function (query, page, ctx) {
+    if (page && page > 1) return [];
+    if (!this._novelMatches(query)) return [];
+    return this._onlyNovel();
   },
 
   getPopularNovels: async function (page, ctx) {
@@ -746,6 +791,9 @@ registerExtension({
     if (!feedRes.ok) throw new Error("فشل جلب تعليقات الفصل: " + feedRes.status);
     var xml = feedRes.text || "";
     var comments = [];
+    // Most recent successfully-parsed pubDate, used only as an undated-item
+    // fallback. See the isNaN branch below.
+    var lastGood = 0;
     var itemRegex = /<item>([\s\S]*?)<\/item>/gi;
     var im;
     while ((im = itemRegex.exec(xml)) !== null) {
@@ -764,7 +812,17 @@ registerExtension({
       var author = authorM ? this._decodeEntities(this._stripTags(authorM[1])).trim() || "—" : "—";
       var dateM = item.match(/<pubDate>([\s\S]*?)<\/pubDate>/i);
       var createdAt = dateM ? Date.parse(dateM[1].trim()) : NaN;
-      if (isNaN(createdAt)) createdAt = Date.now();
+      if (isNaN(createdAt)) {
+        // The feed is chronological, so an undated item is almost certainly
+        // adjacent to the previous one. Falling back to Date.now() — what this
+        // did before — pinned the comment to the present and made it sort as
+        // the newest thing on the chapter. `lastGood` is at worst a few
+        // minutes out and never invents recency. Only a feed whose very first
+        // item is undated falls through to 0.
+        createdAt = lastGood;
+      } else {
+        lastGood = createdAt;
+      }
       var bodyM = item.match(/<content:encoded><!\[CDATA\[([\s\S]*?)\]\]><\/content:encoded>/i)
         || item.match(/<description><!\[CDATA\[([\s\S]*?)\]\]><\/description>/i);
       var rawBody = bodyM ? bodyM[1] : "";
@@ -982,13 +1040,86 @@ registerExtension({
     return [{ name: "فانتازيا", slug: "fantasy" }];
   },
 
+  /**
+   * Only one category exists, so a slug that is not it must return nothing.
+   * This used to forward an empty search and therefore returned the novel for
+   * ANY slug, including a fabricated one.
+   */
   getCategoryNovels: async function (categorySlug, page, ctx) {
+    var slug = (categorySlug || "").trim().toLowerCase();
+    if (slug !== "fantasy") return [];
     return this.searchNovels("", page, ctx);
   },
 
   // ---------------------------------------------------------------
   // Author comments across all chapters (WP REST API)
   // ---------------------------------------------------------------
+
+  /**
+   * Chapter title + permalink for every post a page of comments references,
+   * in ONE request. Split out of getAuthorComments purely for readability; the
+   * behaviour is unchanged.
+   */
+  _postTitlesFor: async function (rows, cleanText, ctx) {
+    var postIds = [];
+    for (var i = 0; i < rows.length; i++) {
+      var pid = rows[i] && rows[i].post;
+      if (pid && postIds.indexOf(pid) === -1) postIds.push(pid);
+    }
+    var map = {};
+    if (!postIds.length) return map;
+    try {
+      var res = await ctx.xFetch(this._absUrl("/wp-json/wp/v2/posts?include="
+        + postIds.join(",") + "&per_page=" + Math.min(postIds.length, 100)
+        + "&_fields=id,title,link"));
+      if (!res.ok) return map;
+      var list = JSON.parse(res.text);
+      if (!Array.isArray(list)) return map;
+      for (var i2 = 0; i2 < list.length; i2++) {
+        var p = list[i2];
+        if (!p || !p.id) continue;
+        var t = p.title && (p.title.rendered || p.title);
+        map[p.id] = { title: cleanText(t), link: p.link || "" };
+      }
+    } catch (e) { /* non-fatal: cards fall back to the number label */ }
+    return map;
+  },
+
+  /**
+   * Attach the quoted parent (author + body) to each reply on the page, using
+   * one batched request for up to 10 distinct parents. Mutates in place.
+   */
+  _attachParentQuotes: async function (comments, cleanText, ctx) {
+    var parentIds = [];
+    for (var i = 0; i < comments.length; i++) {
+      var pid = comments[i].parentId;
+      if (pid && parentIds.indexOf(pid) === -1 && parentIds.length < 10) parentIds.push(pid);
+    }
+    if (!parentIds.length) return;
+    var parentMap = {};
+    try {
+      var res = await _fetchCachedPage(this._absUrl("/wp-json/wp/v2/comments?include="
+        + parentIds.join(",") + "&_fields=id,author_name,content&per_page=100"), ctx);
+      if (!res || !res.ok || !res.text) return;
+      var list = JSON.parse(res.text);
+      if (!Array.isArray(list)) return;
+      for (var j = 0; j < list.length; j++) {
+        var q = list[j];
+        if (!q || !q.id) continue;
+        parentMap[String(q.id)] = {
+          author: cleanText(q.author_name) || "—",
+          body: cleanText(q.content && q.content.rendered ? q.content.rendered : "")
+        };
+      }
+    } catch (e) { /* non-fatal: skip quotes */ }
+    for (var k = 0; k < comments.length; k++) {
+      var info = comments[k].parentId && parentMap[comments[k].parentId];
+      if (!info) continue;
+      if (info.body || info.author) comments[k].replyToAuthor = info.author;
+      if (info.body) comments[k].replyToBody = info.body;
+    }
+  },
+
   getAuthorComments: async function (authorName, page, ctx) {
     var self = this;
     var name = (authorName || "").trim();
@@ -1042,30 +1173,7 @@ registerExtension({
     // Chapter title + permalink, for EVERY post referenced on this page, in a
     // single request. This replaces both the inlined `_embed=up` copies and
     // the old one-request-per-post loop (up to 10 round trips).
-    var postIds = [];
-    for (var i = 0; i < filtered.length; i++) {
-      var pidRaw = filtered[i] && filtered[i].post;
-      if (pidRaw && postIds.indexOf(pidRaw) === -1) postIds.push(pidRaw);
-    }
-    var postMap = {};
-    if (postIds.length) {
-      try {
-        var postsRes = await ctx.xFetch(this._absUrl("/wp-json/wp/v2/posts?include="
-          + postIds.join(",") + "&per_page=" + Math.min(postIds.length, 100)
-          + "&_fields=id,title,link"));
-        if (postsRes.ok) {
-          var postsJson = JSON.parse(postsRes.text);
-          if (Array.isArray(postsJson)) {
-            for (var pi = 0; pi < postsJson.length; pi++) {
-              var pj = postsJson[pi];
-              if (!pj || !pj.id) continue;
-              var pt2 = pj.title && (pj.title.rendered || pj.title);
-              postMap[pj.id] = { title: cleanText(pt2), link: pj.link || "" };
-            }
-          }
-        }
-      } catch (pe2) { /* non-fatal: cards fall back to the number label */ }
-    }
+    var postMap = await self._postTitlesFor(filtered, cleanText, ctx);
 
     var comments = [];
     var totalLikes = 0;
@@ -1119,39 +1227,7 @@ registerExtension({
     // parents instead of N sequential fetches, so reply cards can quote the
     // original. Capped at 10 parents; failures are non-fatal (reply just
     // shows without the quote).
-    try {
-      var parentIds = [];
-      for (var qi = 0; qi < comments.length; qi++) {
-        var qpid = comments[qi].parentId;
-        if (qpid && parentIds.indexOf(qpid) === -1 && parentIds.length < 10) parentIds.push(qpid);
-      }
-      if (parentIds.length > 0) {
-        var parentMap = {};
-        try {
-          var qpRes = await _fetchCachedPage(self._absUrl("/wp-json/wp/v2/comments?include=" + parentIds.join(",") + "&_fields=id,author_name,content&per_page=100"), ctx);
-          if (qpRes && qpRes.ok && qpRes.text) {
-            var qpList = JSON.parse(qpRes.text);
-            if (!Array.isArray(qpList)) qpList = [];
-            for (var qj = 0; qj < qpList.length; qj++) {
-              var qp = qpList[qj];
-              if (qp && qp.id) {
-                parentMap[String(qp.id)] = {
-                  author: cleanText(qp.author_name) || "—",
-                  body: cleanText(qp.content && qp.content.rendered ? qp.content.rendered : "")
-                };
-              }
-            }
-          }
-        } catch (qe) { /* non-fatal: skip quotes */ }
-        for (var qk = 0; qk < comments.length; qk++) {
-          var qInfo = comments[qk].parentId && parentMap[comments[qk].parentId];
-          if (qInfo && (qInfo.body || qInfo.author)) {
-            comments[qk].replyToAuthor = qInfo.author;
-            if (qInfo.body) comments[qk].replyToBody = qInfo.body;
-          }
-        }
-      }
-    } catch (qe2) { /* non-fatal: keep comments without quotes */ }
+    await self._attachParentQuotes(comments, cleanText, ctx);
 
     // Counts are NOT fetched here any more.
     //

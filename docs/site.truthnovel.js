@@ -173,7 +173,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.6.0",
+  version: "1.7.0",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -1126,6 +1126,19 @@ registerExtension({
     if (!name) return { authorName: "", totalComments: 0, totalLikes: 0, comments: [], hasMore: false };
     var pageNum = typeof page === "number" && page >= 1 ? page : 1;
     var perPage = 30;
+
+    // PREFERRED: the site's own exact-author endpoint (see
+    // docs/tn-author-comments-endpoint.php). WordPress' own REST API cannot
+    // filter comments by author, which is why the fallback below was in place
+    // and why it reported a comment count 11x too high: `search` matches comment
+    // BODY, so "تعليق" returned 1039 rows of which only 94 were actually
+    // theirs. Returns null when the plugin is not installed, so the app keeps
+    // working either way.
+    var exact = await this._authorCommentsExact(name, pageNum, perPage, ctx);
+    if (exact) return await this._buildAuthorComments(name, exact.rows, exact.total, exact.hasMore, ctx);
+
+    // FALLBACK (plugin not installed). Same wrong count as before — kept so the
+    // feature degrades rather than disappears.
     // `_embed=up` inlines each comment's ENTIRE parent post. On a novel site a
     // post IS a chapter, so that embedded the full chapter text under every
     // comment: measured 700 KB for one 30-card page. `_fields` asks for the six
@@ -1141,12 +1154,15 @@ registerExtension({
       }
       throw new Error("فشل جلب تعليقات المعلق: " + res.status);
     }
+    // NOTE: this total is the SEARCH's total, not the author's. It is the bug
+    // the endpoint above fixes; it is kept only for the uninstalled-plugin case.
     var totalHeader = (res.headers && (res.headers["x-wp-total"] || res.headers["X-WP-Total"])) || "0";
-    var totalPagesHeader = (res.headers && (res.headers["x-wp-totalpages"] || res.headers["X-WP-TotalPages"])) || "1";
     var total = parseInt(totalHeader, 10);
     if (isNaN(total) || total < 0) total = 0;
+    var totalPagesHeader = (res.headers && (res.headers["x-wp-totalpages"] || res.headers["X-WP-TotalPages"])) || "1";
     var totalPages = parseInt(totalPagesHeader, 10);
     if (isNaN(totalPages) || totalPages < 1) totalPages = 1;
+    var hasMore = pageNum < totalPages;
 
     var rawList = [];
     try {
@@ -1162,6 +1178,46 @@ registerExtension({
       return an === normalizedTarget;
     });
 
+    return await this._buildAuthorComments(name, filtered, total, hasMore, ctx);
+  },
+
+  /**
+   * The site's exact-author endpoint, or null when it is not installed.
+   *
+   * Null (rather than throwing) is deliberate: 404 means "plugin absent" and
+   * must fall through to the legacy search path, while a real transport failure
+   * on an installed endpoint should surface rather than silently degrade back
+   * to the wrong count.
+   */
+  _authorCommentsExact: async function (name, pageNum, perPage, ctx) {
+    var url = this._absUrl("/wp-json/tn/v1/author-comments?author="
+      + encodeURIComponent(name) + "&per_page=" + perPage
+      + "&offset=" + ((pageNum - 1) * perPage));
+    var res;
+    try {
+      res = await _fetchCachedPage(url, ctx);
+    } catch (e) {
+      return null;
+    }
+    if (!res || !res.ok) return null;
+    var body;
+    try { body = JSON.parse(res.text); } catch (e) { return null; }
+    if (!body || !Array.isArray(body.data)) return null;
+    return {
+      rows: body.data,
+      total: Number(body.total) || body.data.length,
+      // The endpoint knows exactly whether another page exists, so the app
+      // never has to infer it from a mismatched total.
+      hasMore: body.has_more === true
+    };
+  },
+
+  /**
+   * Shared enrichment: raw WP comment rows -> the shape the host expects
+   * (chapter labels, quoted replies, images, known vote counts).
+   */
+  _buildAuthorComments: async function (name, filtered, total, hasMore, ctx) {
+    var self = this;
     var cleanText = function (html) {
       if (!html) return "";
       var stripped = html.replace(/<[^>]+>/g, " ");
@@ -1247,7 +1303,7 @@ registerExtension({
       // the old code summed a mix of real and fabricated zeros.
       totalLikes: totalLikes,
       comments: comments,
-      hasMore: pageNum < totalPages
+      hasMore: hasMore === true
     };
   }
 });

@@ -132,11 +132,89 @@ describe("site:truthnovel extension", () => {
     expect(undated.createdAt).toBeLessThan(Date.now() - 86400000);
   });
 
+  it("uses the site's exact-author endpoint when it is installed", async () => {
+    // The real defect this fixes: with only wp/v2/comments available, the
+    // profile reported 1039 for an account that has 94, because `search`
+    // matches comment BODY (945 of those rows were other people writing the
+    // word "تعليق") and the profile pages were sparse.
+    const fresh = loadExtension("site.truthnovel.js");
+    let exactHits = 0, searchHits = 0;
+    const ctx = mockCtx({
+      "/wp-json/tn/v1/author-comments": (url) => {
+        exactHits += 1;
+        expect(url).toContain("author=" + encodeURIComponent("تعليق"));
+        expect(url).toContain("offset=0");
+        return ok(JSON.stringify({
+          total: 94,
+          has_more: true,
+          data: [
+            { id: 1, author_name: "تعليق", content: { rendered: "<p>أول</p>" }, link: "https://truthnovel.top/1-x/#comment-1", date_gmt: "2026-09-01T10:00:00", parent: 0, post: 1 },
+            { id: 2, author_name: "تعليق", content: { rendered: "<p>ثاني</p>" }, link: "https://truthnovel.top/1-x/#comment-2", date_gmt: "2026-09-02T10:00:00", parent: 1, post: 1 }
+          ]
+        }));
+      },
+      "/wp-json/wp/v2/comments?search=": () => { searchHits += 1; return ok("[]"); },
+      "/wp-json/wp/v2/posts?include=": () => ok(JSON.stringify([
+        { id: 1, title: { rendered: "1 -أ" }, link: "https://truthnovel.top/1-x/" }
+      ]))
+    });
+    const res = await fresh.getAuthorComments("تعليق", 1, ctx);
+    // The EXACT count, not a search total.
+    expect(res.totalComments).toBe(94);
+    expect(res.comments).toHaveLength(2);
+    expect(res.comments[0].chapterTitle).toBe("1 -أ");
+    expect(res.comments[1].parentId).toBe("1");
+    expect(res.hasMore).toBe(true);
+    expect(exactHits).toBe(1);
+    // The broken path was never touched.
+    expect(searchHits).toBe(0);
+  });
+
+  it("pages the exact endpoint with a real offset", async () => {
+    const fresh = loadExtension("site.truthnovel.js");
+    let seen = "";
+    const ctx = mockCtx({
+      "/wp-json/tn/v1/author-comments": (url) => {
+        seen = url;
+        return ok(JSON.stringify({ total: 94, has_more: false, data: [] }));
+      }
+    });
+    const res = await fresh.getAuthorComments("تعليق", 3, ctx);
+    expect(seen).toContain("offset=60"); // (page 3 - 1) * 30
+    expect(res.hasMore).toBe(false);
+  });
+
+  it("falls back to the legacy search when the endpoint is absent", async () => {
+    // Installing the plugin is optional; the app must not break before that.
+    const fresh = loadExtension("site.truthnovel.js");
+    const ctx = mockCtx({
+      "/wp-json/tn/v1/author-comments": () => ({ ok: false, status: 404, text: "" }),
+      "/wp-json/wp/v2/comments?search=": () => ({
+        ok: true, status: 200,
+        headers: { "x-wp-total": "1039", "x-wp-totalpages": "35" },
+        text: JSON.stringify([
+          { id: 1, author_name: "تعليق", content: { rendered: "<p>ملكي</p>" }, link: "https://truthnovel.top/1-x/#comment-1", date_gmt: "2026-09-01T10:00:00", parent: 0, post: 1 },
+          { id: 2, author_name: "شخص آخر", content: { rendered: "<p>ذكر تعليق</p>" }, link: "https://truthnovel.top/1-x/#comment-2", date_gmt: "2026-09-02T10:00:00", parent: 0, post: 1 }
+        ])
+      }),
+      "/wp-json/wp/v2/posts?include=": () => ok(JSON.stringify([
+        { id: 1, title: { rendered: "1 -أ" }, link: "https://truthnovel.top/1-x/" }
+      ]))
+    });
+    const res = await fresh.getAuthorComments("تعليق", 1, ctx);
+    // Only the author's own row survives the client-side filter.
+    expect(res.comments).toHaveLength(1);
+    expect(res.comments[0].body).toBe("ملكي");
+    // The known-wrong count is still reported on this path — documented, and
+    // the reason the endpoint exists.
+    expect(res.totalComments).toBe(1039);
+  });
+
   it("has valid metadata", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.6.0");
+    expect(ext.version).toBe("1.7.0");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });

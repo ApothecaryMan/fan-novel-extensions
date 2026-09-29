@@ -7,6 +7,115 @@
 var _htmlCache = {};
 var _CACHE_TTL_MS = 10 * 60 * 1000;
 
+// wpDiscuz vote counts, keyed by comment id. NO TTL on purpose.
+//
+// The commenter profile used to re-download up to 10 whole chapter pages
+// (~195 KB each) purely to re-scrape counts it had already seen, because
+// _htmlCache expires after 10 minutes. The reader path (getComments) already
+// fetches that same page and parses the counts, so it fills this map for
+// free; voteComment fills it from its own response. A chapter read once stays
+// known for the whole runtime with zero further requests.
+//
+// A miss means UNKNOWN, which is not the same as zero — callers must render
+// nothing rather than a fake 0.
+var _voteCounts = {};
+
+// wpDiscuz nonce. Cached because it was previously refetched on EVERY vote and
+// every post, doubling the request count of both. wpDiscuz nonces are valid
+// for hours; 30 min is comfortably inside that and still self-heals if the
+// site ever rotates them (a rejected vote just refetches).
+var _nonceCache = null;
+var _NONCE_TTL_MS = 30 * 60 * 1000;
+
+// chapter URL -> numeric post id. Small, permanent, and it makes replying to
+// the same chapter free after the first time.
+var _postIdByUrl = {};
+
+/**
+ * Resolve a chapter URL to its numeric WordPress post id.
+ *
+ * Cheap path: a tiny REST probe (a few hundred bytes) that matches the post's
+ * canonical link. Expensive path: the old behaviour of downloading the whole
+ * chapter page and scraping `wc_post_id`, kept only so an unusual URL that
+ * REST cannot match still works instead of failing the post outright.
+ */
+function _resolvePostId(fullUrl, ctx) {
+  if (_postIdByUrl[fullUrl]) return Promise.resolve(_postIdByUrl[fullUrl]);
+  return ctx.xFetch("https://truthnovel.top/wp-json/wp/v2/posts?per_page=1&_fields=id,link&slug="
+      + encodeURIComponent(_slugFromUrl(fullUrl)))
+    .then(function (res) {
+      if (!res.ok) return null;
+      var list;
+      try { list = JSON.parse(res.text); } catch (e) { return null; }
+      if (!Array.isArray(list) || !list[0] || !list[0].id) return null;
+      // Trust the link only when it really is this chapter — the slug probe can
+      // land on a different post with the same slug on a multi-novel site.
+      if (list[0].link && fullUrl && list[0].link.split("#")[0].replace(/\/+$/, "") !== fullUrl.replace(/\/+$/, "")) {
+        return null;
+      }
+      _postIdByUrl[fullUrl] = String(list[0].id);
+      return _postIdByUrl[fullUrl];
+    })
+    .catch(function () { return null; })
+    .then(function (id) {
+      if (id) return id;
+      return ctx.xFetch(fullUrl).then(function (pageRes) {
+        if (!pageRes.ok) throw new Error("فشل فتح صفحة الفصل: " + pageRes.status);
+        var html = pageRes.text || "";
+        var m = html.match(/"wc_post_id"\s*:\s*"(\d+)"/) || html.match(/wc_post_id["']?\s*[:=]\s*["']?(\d+)/);
+        if (!m) throw new Error("تعذر تحديد معرف المقال");
+        _postIdByUrl[fullUrl] = m[1];
+        return m[1];
+      });
+    });
+}
+
+/** Trailing slug of a permalink, e.g. "/2469-اسم/" -> "2469-اسم". */
+function _slugFromUrl(fullUrl) {
+  var s = String(fullUrl || "").split("#")[0].split("?")[0].replace(/\/+$/, "");
+  var seg = s.substring(s.lastIndexOf("/") + 1);
+  try { return decodeURIComponent(seg); } catch (e) { return seg; }
+}
+
+/** Cached wpDiscuz nonce; one request per 30 min instead of one per call. */
+function _getNonce(ctx) {
+  var now = Date.now();
+  if (_nonceCache && now - _nonceCache.ts < _NONCE_TTL_MS) {
+    return Promise.resolve(_nonceCache.nonce);
+  }
+  var ajaxUrl = "https://truthnovel.top/wp-admin/admin-ajax.php";
+  return ctx.xFetch(ajaxUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+    body: "action=wpdGetNonce"
+  }).then(function (res) {
+    if (!res.ok) throw new Error("فشل تجهيز التفاعل: " + res.status);
+    var data;
+    try { data = JSON.parse(res.text); } catch (e) { throw new Error("رد غير متوقع من الموقع"); }
+    var nonce = data && data.data && data.data.wpdiscuz_nonce;
+    if (!nonce) throw new Error("تعذر تجهيز التفاعل (nonce)");
+    _nonceCache = { nonce: nonce, ts: now };
+    return nonce;
+  });
+}
+
+/** Remember a count so the profile never has to refetch the chapter for it. */
+function _rememberVotes(pageHtml) {
+  if (!pageHtml) return;
+  var re = /id="comment-(\d+)"[\s\S]{0,6000}?wpd-vote-result[^>]*title='(-?\d+)'/g;
+  var m;
+  while ((m = re.exec(pageHtml)) !== null) {
+    var v = parseInt(m[2], 10);
+    if (!isNaN(v) && v >= 0) _voteCounts[m[1]] = v;
+  }
+}
+
+/** Known count for a comment, or undefined when we genuinely don't know. */
+function _knownVotes(id) {
+  var v = _voteCounts[String(id)];
+  return typeof v === "number" ? v : undefined;
+}
+
 // Total-views state (module cache, lives while the runtime is alive):
 // post IDs + summed views. Cold fill crawls tiny _fields=id REST pages;
 // warm refreshes resolve ONLY new chapters from the chapter feed.
@@ -32,7 +141,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.3.0",
+  version: "1.4.0",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -589,6 +698,10 @@ registerExtension({
         pageHtml = pageRes.text;
         var cc = pageHtml.match(/"commentCount"\s*:\s*(\d+)/);
         if (cc) count = parseInt(cc[1], 10);
+        // The page is already in hand, so bank every count on it. This is what
+        // lets the commenter profile show real numbers for a chapter the
+        // reader has opened, with no extra request of its own.
+        _rememberVotes(pageHtml);
       }
     } catch (e) { /* non-fatal */ }
 
@@ -732,13 +845,12 @@ registerExtension({
   // held_moderate:1 (invisible in feed until approved).
   // ---------------------------------------------------------------
   postComment: async function (chapterUrl, input, ctx) {
+    // Step 1 is RESOLVING the post id, and it used to do that by downloading
+    // the entire chapter page (~195 KB) on every single post. The REST posts
+    // endpoint is a few hundred bytes for the same number, so the page fetch
+    // only remains as a fallback for a URL REST cannot resolve.
     var fullUrl = this._absUrl(chapterUrl);
-    var pageRes = await ctx.xFetch(fullUrl);
-    if (!pageRes.ok) throw new Error("فشل فتح صفحة الفصل: " + pageRes.status);
-    var html = pageRes.text || "";
-    var postIdM = html.match(/"wc_post_id"\s*:\s*"(\d+)"/) || html.match(/wc_post_id["']?\s*[:=]\s*["']?(\d+)/);
-    if (!postIdM) throw new Error("تعذر تحديد معرف المقال");
-    var postId = postIdM[1];
+    var postId = await _resolvePostId(fullUrl, ctx);
     var author = (input && input.author || "").trim().slice(0, 50);
     var email = (input && input.email || "").trim().slice(0, 100);
     var body = (input && input.body || "").trim();
@@ -746,17 +858,8 @@ registerExtension({
     if (author.length < 3) throw new Error("الاسم قصير (3 أحرف على الأقل)");
     var parentRaw = input && input.parentId ? String(input.parentId).replace(/\D/g, "") : "";
     var ajaxUrl = this._absUrl("/wp-admin/admin-ajax.php");
-    // 1) Fresh nonce (wpDiscuz does not embed it in the form HTML)
-    var nonceRes = await ctx.xFetch(ajaxUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-      body: "action=wpdGetNonce"
-    });
-    if (!nonceRes.ok) throw new Error("فشل تجهيز التعليق: " + nonceRes.status);
-    var nonceData;
-    try { nonceData = JSON.parse(nonceRes.text); } catch (e) { throw new Error("رد غير متوقع من الموقع"); }
-    var nonce = nonceData && nonceData.data && nonceData.data.wpdiscuz_nonce;
-    if (!nonce) throw new Error("تعذر تجهيز التعليق (nonce)");
+    // 1) Nonce (cached — see _getNonce; wpDiscuz does not embed it in the HTML)
+    var nonce = await _getNonce(ctx);
     // 2) Threading: top-level 0_0/depth 1; reply {parent}_0/depth parent+1
     var uniqueId = "0_0";
     var depth = "1";
@@ -808,16 +911,9 @@ registerExtension({
     if (!rawId) throw new Error("تعذر تحديد التعليق");
     var vote = input && input.vote === -1 ? "-1" : "1";
     var ajaxUrl = this._absUrl("/wp-admin/admin-ajax.php");
-    var nonceRes = await ctx.xFetch(ajaxUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-      body: "action=wpdGetNonce"
-    });
-    if (!nonceRes.ok) throw new Error("فشل تجهيز التصويت: " + nonceRes.status);
-    var nonceData;
-    try { nonceData = JSON.parse(nonceRes.text); } catch (e) { throw new Error("رد غير متوقع من الموقع"); }
-    var nonce = nonceData && nonceData.data && nonceData.data.wpdiscuz_nonce;
-    if (!nonce) throw new Error("تعذر تجهيز التصويت (nonce)");
+    // Cached nonce: this used to be its own request on every single vote,
+    // doubling the cost of tapping a heart.
+    var nonce = await _getNonce(ctx);
     var params = "action=wpdVoteOnComment&commentId=" + encodeURIComponent(rawId)
       + "&voteType=" + encodeURIComponent(vote)
       + "&wpdiscuz_nonce=" + encodeURIComponent(nonce);
@@ -836,6 +932,10 @@ registerExtension({
     var d = data && data.data ? data.data : {};
     var likes = parseInt(d.likeCount, 10);
     if (isNaN(likes) || likes < 0) likes = 0;
+    // The vote response is the only place a count appears without a chapter
+    // fetch, so bank it: the profile shows the exact number straight away and
+    // keeps it for the rest of the session.
+    _voteCounts[rawId] = likes;
     return { ok: true, likes: likes, liked: d.curUserReaction === 1 || d.curUserReaction === "1" };
   },
 
@@ -856,7 +956,14 @@ registerExtension({
     if (!name) return { authorName: "", totalComments: 0, totalLikes: 0, comments: [], hasMore: false };
     var pageNum = typeof page === "number" && page >= 1 ? page : 1;
     var perPage = 30;
-    var apiUrl = this._absUrl("/wp-json/wp/v2/comments?search=" + encodeURIComponent(name) + "&per_page=" + perPage + "&page=" + pageNum + "&_embed=up");
+    // `_embed=up` inlines each comment's ENTIRE parent post. On a novel site a
+    // post IS a chapter, so that embedded the full chapter text under every
+    // comment: measured 700 KB for one 30-card page. `_fields` asks for the six
+    // keys actually used, and the chapter title/link is then resolved in ONE
+    // batched `include=` request below. Same data, ~12 KB.
+    var apiUrl = this._absUrl("/wp-json/wp/v2/comments?search=" + encodeURIComponent(name)
+      + "&per_page=" + perPage + "&page=" + pageNum
+      + "&_fields=id,author_name,content,link,date,date_gmt,parent,post");
     var res = await ctx.xFetch(apiUrl);
     if (!res.ok) {
       if (res.status === 400 || res.status === 404) {
@@ -893,37 +1000,32 @@ registerExtension({
         .trim();
     };
 
-    var postMap = {};
-    var missingPostIds = [];
+    // Chapter title + permalink, for EVERY post referenced on this page, in a
+    // single request. This replaces both the inlined `_embed=up` copies and
+    // the old one-request-per-post loop (up to 10 round trips).
+    var postIds = [];
     for (var i = 0; i < filtered.length; i++) {
-      var item = filtered[i];
-      var embeddedUp = item._embedded && item._embedded.up && item._embedded.up[0];
-      if (embeddedUp && embeddedUp.title) {
-        var t = typeof embeddedUp.title === "object" ? embeddedUp.title.rendered : embeddedUp.title;
-        postMap[item.post] = {
-          title: cleanText(t),
-          link: embeddedUp.link || ""
-        };
-      } else if (item.post && !postMap[item.post] && missingPostIds.indexOf(item.post) === -1) {
-        missingPostIds.push(item.post);
-      }
+      var pidRaw = filtered[i] && filtered[i].post;
+      if (pidRaw && postIds.indexOf(pidRaw) === -1) postIds.push(pidRaw);
     }
-
-    for (var m = 0; m < Math.min(missingPostIds.length, 10); m++) {
-      var pid = missingPostIds[m];
+    var postMap = {};
+    if (postIds.length) {
       try {
-        var pRes = await ctx.xFetch(this._absUrl("/wp-json/wp/v2/posts/" + pid + "?_fields=id,title,link"));
-        if (pRes.ok) {
-          var pJson = JSON.parse(pRes.text);
-          if (pJson) {
-            var pt = pJson.title && (pJson.title.rendered || pJson.title);
-            postMap[pid] = {
-              title: cleanText(pt),
-              link: pJson.link || ""
-            };
+        var postsRes = await ctx.xFetch(this._absUrl("/wp-json/wp/v2/posts?include="
+          + postIds.join(",") + "&per_page=" + Math.min(postIds.length, 100)
+          + "&_fields=id,title,link"));
+        if (postsRes.ok) {
+          var postsJson = JSON.parse(postsRes.text);
+          if (Array.isArray(postsJson)) {
+            for (var pi = 0; pi < postsJson.length; pi++) {
+              var pj = postsJson[pi];
+              if (!pj || !pj.id) continue;
+              var pt2 = pj.title && (pj.title.rendered || pj.title);
+              postMap[pj.id] = { title: cleanText(pt2), link: pj.link || "" };
+            }
           }
         }
-      } catch (pe) { /* non-fatal fallback */ }
+      } catch (pe2) { /* non-fatal: cards fall back to the number label */ }
     }
 
     var comments = [];
@@ -953,11 +1055,20 @@ registerExtension({
         id: String(c.id),
         body: body,
         createdAt: dateMs,
-        likes: 0,
         chapterTitle: postInfo.title || ("الفصل " + (c.post || "")),
         chapterUrl: chapterUrl,
         images: images.length > 0 ? images.slice(0, 4) : undefined
       };
+      // `likes` is set ONLY when we actually know the number (from the reader
+      // path, or from an earlier vote). The field is otherwise absent, which
+      // the host renders as "no count". The old code wrote a hardcoded 0 for
+      // every comment, so any card whose chapter it had not scraped displayed
+      // a confident, wrong zero.
+      var known = _knownVotes(c.id);
+      if (known !== undefined) {
+        entry.likes = known;
+        totalLikes += known;
+      }
       // WP REST parent id (0 = top-level). Kept so the host can show the
       // original comment inside reply cards; resolved below.
       var pId = parseInt(c.parent, 10);
@@ -1003,72 +1114,22 @@ registerExtension({
       }
     } catch (qe2) { /* non-fatal: keep comments without quotes */ }
 
-    // Fetch chapter pages to extract real wpDiscuz likes
-    var uniqueChapterUrls = [];
-    for (var k = 0; k < comments.length; k++) {
-      var cu = comments[k].chapterUrl;
-      if (cu && uniqueChapterUrls.indexOf(cu) === -1) {
-        uniqueChapterUrls.push(cu);
-      }
-    }
-
-    for (var u = 0; u < Math.min(uniqueChapterUrls.length, 10); u++) {
-      var chUrl = uniqueChapterUrls[u];
-      try {
-        var pageRes = await _fetchCachedPage(self._absUrl(chUrl), ctx);
-        if (pageRes && pageRes.ok && pageRes.text) {
-          var pageHtml = pageRes.text;
-          // wpDiscuz attachments (wmu-comment-attachments) are NOT in the
-          // REST feed — merge them from the page by data-comment-id so
-          // cards can show thumbs. Zero extra requests: these pages are
-          // already fetched for likes above.
-          var attachMap = {};
-          var attRe = /data-comment-id='(\d+)'/g;
-          var attM;
-          while ((attM = attRe.exec(pageHtml)) !== null) {
-            var aid = attM[1];
-            var awin = pageHtml.substr(attM.index, 4000);
-            var urls = awin.match(/https?:\/\/truthnovel\.top\/wp-content\/uploads\/[^'"()\s]+?\.(?:gif|jpe?g|png|webp|bmp)/gi);
-            if (urls) {
-              var uniq = [];
-              for (var ui = 0; ui < urls.length && uniq.length < 4; ui++) {
-                if (uniq.indexOf(urls[ui]) === -1) uniq.push(urls[ui]);
-              }
-              if (uniq.length > 0) attachMap[aid] = uniq;
-            }
-          }
-          for (var ci = 0; ci < comments.length; ci++) {
-            if (comments[ci].chapterUrl === chUrl) {
-              var cid = comments[ci].id;
-              if (attachMap[cid]) {
-                var merged = (comments[ci].images || []).concat(attachMap[cid]);
-                var dedup = [];
-                for (var mi = 0; mi < merged.length && dedup.length < 4; mi++) {
-                  if (dedup.indexOf(merged[mi]) === -1) dedup.push(merged[mi]);
-                }
-                if (dedup.length > 0) comments[ci].images = dedup;
-              }
-              var idx = pageHtml.indexOf('id="comment-' + cid + '"');
-              if (idx !== -1) {
-                var window_ = pageHtml.substr(idx, 6000);
-                var vm = window_.match(/wpd-vote-result[^>]*title=['"](-?\d+)['"]/);
-                if (vm) {
-                  var v = parseInt(vm[1], 10);
-                  if (!isNaN(v) && v >= 0) {
-                    totalLikes += v - comments[ci].likes;
-                    comments[ci].likes = v;
-                  }
-                }
-              }
-            }
-          }
-        }
-      } catch (pe) { /* non-fatal: keep 0 */ }
-    }
-
+    // Counts are NOT fetched here any more.
+    //
+    // This block used to download up to 10 whole chapter pages (~195 KB each,
+    // ~1.95 MB per profile open) purely to re-scrape wpDiscuz vote totals —
+    // and still got it wrong for every comment past the 10-chapter cap, which
+    // silently rendered as a hardcoded 0. The reader path already parses that
+    // identical page and banks every count into `_voteCounts`, so a chapter you
+    // have opened is known here for free and forever. Anything not in that map
+    // is reported WITHOUT a `likes` key, and the host draws no number rather
+    // than a wrong one. Tapping the heart on such a card returns the exact
+    // count and banks it for next time.
     return {
       authorName: name,
       totalComments: total > 0 ? total : comments.length,
+      // Sum of what is actually known, not a guess. A partial total is honest;
+      // the old code summed a mix of real and fabricated zeros.
       totalLikes: totalLikes,
       comments: comments,
       hasMore: pageNum < totalPages

@@ -46,7 +46,7 @@ describe("site:truthnovel extension", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.3.0");
+    expect(ext.version).toBe("1.4.0");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -272,6 +272,9 @@ describe("site:truthnovel extension", () => {
   });
 
   it("votes via wpdVoteOnComment and returns server counts", async () => {
+    // A FRESH instance: the nonce is cached in module scope, so a shared
+    // instance would leak a warmed nonce from an earlier test.
+    const fresh = loadExtension("site.truthnovel.js");
     const seen = [];
     const ctx = mockCtx({
       "admin-ajax.php": (url, init) => {
@@ -283,7 +286,7 @@ describe("site:truthnovel extension", () => {
         return ok(JSON.stringify({ success: true, data: { likeCount: "15", curUserReaction: 1 } }));
       }
     });
-    const res = await ext.voteComment("https://truthnovel.top/2430-x/", { commentId: "58659", vote: 1 }, ctx);
+    const res = await fresh.voteComment("https://truthnovel.top/2430-x/", { commentId: "58659", vote: 1 }, ctx);
     expect(res.ok).toBe(true);
     expect(res.likes).toBe(15);
     expect(res.liked).toBe(true);
@@ -291,38 +294,68 @@ describe("site:truthnovel extension", () => {
     expect(vote).toContain("commentId=58659");
     expect(vote).toContain("voteType=1");
     expect(vote).toContain("wpdiscuz_nonce=v1");
-    await expect(ext.voteComment("https://truthnovel.top/2430-x/", { commentId: "", vote: 1 }, ctx)).rejects.toThrow();
+    await expect(fresh.voteComment("https://truthnovel.top/2430-x/", { commentId: "", vote: 1 }, ctx)).rejects.toThrow();
+
+    // The nonce used to be refetched on EVERY vote, doubling the cost of a tap.
+    // It is now cached, so a second vote adds no nonce request.
+    const nonceFetches = () => seen.filter((b) => b.includes("action=wpdGetNonce")).length;
+    const before = nonceFetches();
+    await fresh.voteComment("https://truthnovel.top/2430-x/", { commentId: "58659", vote: 1 }, ctx);
+    expect(nonceFetches()).toBe(before);
+  });
+
+  it("banks the count a vote returns so the profile needs no chapter fetch", async () => {
+    const fresh = loadExtension("site.truthnovel.js");
+    const ctx = mockCtx({
+      "admin-ajax.php": (url, init) => {
+        const body = String(init.body || "");
+        if (body.includes("action=wpdGetNonce")) {
+          return ok(JSON.stringify({ success: true, data: { wpdiscuz_nonce: "v1" } }));
+        }
+        return ok(JSON.stringify({ success: true, data: { likeCount: "42", curUserReaction: 1 } }));
+      }
+    });
+    await fresh.voteComment("https://truthnovel.top/2430-x/", { commentId: "58659", vote: 1 }, ctx);
+
+    const requested = [];
+    const listCtx = mockCtx({
+      "/wp-json/wp/v2/comments": (url) => {
+        requested.push(url);
+        return {
+          status: 200, ok: true, headers: { "x-wp-total": "1", "x-wp-totalpages": "1" },
+          text: JSON.stringify([{
+            id: 58659, post: 2432, author_name: "n", date: "2026-09-12T19:02:45",
+            content: { rendered: "<p>hi</p>" }, link: "https://truthnovel.top/2432-decision/#comment-58659"
+          }])
+        };
+      },
+      "/wp-json/wp/v2/posts?include=": () => ok(JSON.stringify([
+        { id: 2432, title: { rendered: "2432 -قرار" }, link: "https://truthnovel.top/2432-decision/" }
+      ]))
+    });
+    const res = await fresh.getAuthorComments("n", 1, listCtx);
+    expect(res.comments[0].likes).toBe(42);
+    expect(res.totalLikes).toBe(42);
+    // Critically: no chapter page was downloaded to learn that.
+    expect(requested.some((u) => /2432-decision\/?$/.test(u))).toBe(false);
   });
 
   it("fetches author comments across chapters via WP REST API", async () => {
     const mockComments = [
       {
         id: 58826,
-        post: 10907,
+        post: 2432,
         author_name: "اورابوراس",
         date: "2026-09-12T19:02:45",
         content: { rendered: "<p>تعليق تجريبي رائع &#8230;</p>\n" },
-        _embedded: {
-          up: [
-            {
-              id: 10907,
-              title: { rendered: "2432 -قرار روبين" },
-              link: "https://truthnovel.top/2432-decision/"
-            }
-          ]
-        }
+        link: "https://truthnovel.top/2432-decision/#comment-58826"
       }
     ];
 
-    const sampleChapterHtml = `
-      <div id="comment-58826" class="wpd-comment-right">
-        <div class="wpd-comment-header">اورابوراس</div>
-        <div class='wpd-vote-result wpd-vote-result-like' title='15'>15</div>
-      </div>
-    `;
-
+    const requested = [];
     const ctx = mockCtx({
       "/wp-json/wp/v2/comments": (url) => {
+        requested.push(url);
         return {
           status: 200,
           ok: true,
@@ -333,20 +366,108 @@ describe("site:truthnovel extension", () => {
           text: JSON.stringify(mockComments)
         };
       },
-      "https://truthnovel.top/2432-decision/": ok(sampleChapterHtml)
+      "/wp-json/wp/v2/posts?include=": (url) => {
+        requested.push(url);
+        return ok(JSON.stringify([
+          { id: 2432, title: { rendered: "2432 -قرار روبين" }, link: "https://truthnovel.top/2432-decision/" }
+        ]));
+      },
+      "https://truthnovel.top/2432-decision/": () => {
+        requested.push("CHAPTER-PAGE");
+        return ok("<html>should never be fetched</html>");
+      }
     });
 
     const res = await ext.getAuthorComments("اورابوراس", 1, ctx);
     expect(res.authorName).toBe("اورابوراس");
     expect(res.totalComments).toBe(108);
-    expect(res.totalLikes).toBe(15);
     expect(res.hasMore).toBe(true);
     expect(res.comments.length).toBe(1);
     expect(res.comments[0].id).toBe("58826");
-    expect(res.comments[0].likes).toBe(15);
     expect(res.comments[0].chapterTitle).toBe("2432 -قرار روبين");
     expect(res.comments[0].chapterUrl).toBe("https://truthnovel.top/2432-decision/");
     expect(res.comments[0].body).toBe("تعليق تجريبي رائع …");
+
+    // The regression this locks down: the profile must NOT download chapter
+    // pages any more. It used to pull up to 10 of them (~195 KB each) per open.
+    expect(requested).not.toContain("CHAPTER-PAGE");
+    // And it must not ask WordPress to inline every parent post either — that
+    // alone was ~700 KB per page, because a "post" here is a whole chapter.
+    expect(requested.some((u) => u.includes("_embed=up"))).toBe(false);
+    // The whole page costs one comments call plus ONE batched titles call.
+    expect(requested.length).toBe(2);
+  });
+
+  it("omits likes entirely when the count is unknown, rather than reporting 0", async () => {
+    // A hardcoded 0 used to make an un-scraped comment look confidently
+    // unliked. Absent means "we don't know", which the host renders as no
+    // number at all.
+    const fresh = loadExtension("site.truthnovel.js");
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/comments": () => ({
+        status: 200, ok: true, headers: { "x-wp-total": "1", "x-wp-totalpages": "1" },
+        text: JSON.stringify([{
+          id: 700, post: 2432, author_name: "n", date: "2026-09-12T19:02:45",
+          content: { rendered: "<p>hi</p>" }, link: "https://truthnovel.top/2432-decision/#comment-700"
+        }])
+      }),
+      "/wp-json/wp/v2/posts?include=": () => ok(JSON.stringify([
+        { id: 2432, title: { rendered: "2432 -قرار" }, link: "https://truthnovel.top/2432-decision/" }
+      ]))
+    });
+    const res = await fresh.getAuthorComments("n", 1, ctx);
+    expect("likes" in res.comments[0]).toBe(false);
+    expect(res.totalLikes).toBe(0);
+  });
+
+  it("reports a count the reader path already saw, with no extra request", async () => {
+    // getComments parses the chapter page for the reader anyway; it banks the
+    // counts, so opening the same author's profile afterwards is free.
+    const fresh = loadExtension("site.truthnovel.js");
+    const chapterHtml = `
+      <div id="comment-58826" class="wpd-comment-right">
+        <div class='wpd-vote-result wpd-vote-result-like' title='15'>15</div>
+      </div>
+    `;
+    const feedXml = `<rss><channel>
+      <item>
+        <link>https://truthnovel.top/2432-decision/#comment-58826</link>
+        <dc:creator><![CDATA[اورابوراس]]></dc:creator>
+        <pubDate>Sat, 12 Sep 2026 19:02:45 +0000</pubDate>
+        <content:encoded><![CDATA[<p>مرحبا</p>]]></content:encoded>
+      </item>
+    </channel></rss>`;
+
+    await fresh.getComments("https://truthnovel.top/2432-decision/", mockCtx({
+      "https://truthnovel.top/2432-decision/": ok(chapterHtml),
+      "https://truthnovel.top/2432-decision/feed/": ok(feedXml)
+    }));
+
+    const requested = [];
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/comments": (url) => {
+        requested.push(url);
+        return {
+          status: 200, ok: true, headers: { "x-wp-total": "1", "x-wp-totalpages": "1" },
+          text: JSON.stringify([{
+            id: 58826, post: 2432, author_name: "اورابوراس", date: "2026-09-12T19:02:45",
+            content: { rendered: "<p>مرحبا</p>" }, link: "https://truthnovel.top/2432-decision/#comment-58826"
+          }])
+        };
+      },
+      "/wp-json/wp/v2/posts?include=": (url) => {
+        requested.push(url);
+        return ok(JSON.stringify([
+          { id: 2432, title: { rendered: "2432 -قرار" }, link: "https://truthnovel.top/2432-decision/" }
+        ]));
+      }
+    });
+    const res = await fresh.getAuthorComments("اورابوراس", 1, ctx);
+    expect(res.comments[0].likes).toBe(15);
+    expect(res.totalLikes).toBe(15);
+    // Comments + one batched titles call. No chapter page, because getComments
+    // already banked that count.
+    expect(requested.length).toBe(2);
   });
 
   it("quotes the parent comment inside reply cards", async () => {
@@ -412,10 +533,17 @@ describe("site:truthnovel extension", () => {
     expect(top.replyToBody).toBeUndefined();
   });
 
-  it("merges page-only wmu attachments into profile comments", async () => {
-    // Feed content never carries wpDiscuz uploads — they live only in the
-    // chapter page HTML (data-comment-id). Regression: profile cards showed
-    // no images at all because only the feed was read.
+  it("KNOWN LIMITATION: wpDiscuz page-only attachments are not merged into profile cards", async () => {
+    // wpDiscuz's drag-and-drop attachments (wmu-attached-images) exist ONLY in
+    // the chapter page HTML, never in the REST comment body. Reading them
+    // therefore requires downloading that page — which is the ~195 KB x 10
+    // (1.95 MB per profile open) this extension no longer does.
+    //
+    // So: profile cards now show images that are inline in the comment body,
+    // and NOT wpDiscuz's separate attachment feature. That is a deliberate
+    // trade for removing the 1.95 MB. If these thumbs matter more than the
+    // bandwidth, the fix is a batched endpoint on the site — not re-adding the
+    // page crawl.
     const mockComments = [
       {
         id: 60202,
@@ -424,15 +552,7 @@ describe("site:truthnovel extension", () => {
         author_name: "اورابوراس",
         date: "2026-09-22T19:56:42",
         content: { rendered: "<p>قيصر وهو يسلك طريق التعالي…</p>" },
-        _embedded: {
-          up: [
-            {
-              id: 11065,
-              title: { rendered: "2456 -الكائنات" },
-              link: "https://truthnovel.top/2456-x/"
-            }
-          ]
-        }
+        link: "https://truthnovel.top/2456-x/#comment-60202"
       }
     ];
     const chapterHtml =
@@ -440,19 +560,51 @@ describe("site:truthnovel extension", () => {
       `<a href='https://truthnovel.top/wp-content/uploads/2026/09/g.9.gif'>` +
       `<img src='https://truthnovel.top/wp-content/uploads/2026/09/g.9.gif' /></a>` +
       `</div></div><div id="comment-60202"></div>`;
+
+    const fresh = loadExtension("site.truthnovel.js");
+    const requested = [];
     const ctx = mockCtx({
-      "/wp-json/wp/v2/comments?search=": () => ({
-        status: 200,
-        ok: true,
-        headers: { "x-wp-total": "1", "x-wp-totalpages": "1" },
-        text: JSON.stringify(mockComments)
-      }),
-      "https://truthnovel.top/2456-x/": ok(chapterHtml)
+      "/wp-json/wp/v2/comments": (url) => {
+        requested.push(url);
+        return {
+          status: 200, ok: true,
+          headers: { "x-wp-total": "1", "x-wp-totalpages": "1" },
+          text: JSON.stringify(mockComments)
+        };
+      },
+      "/wp-json/wp/v2/posts?include=": () => ok(JSON.stringify([
+        { id: 11065, title: { rendered: "2456 -الكائنات" }, link: "https://truthnovel.top/2456-x/" }
+      ])),
+      "https://truthnovel.top/2456-x/": () => {
+        requested.push("CHAPTER-PAGE");
+        return ok(chapterHtml);
+      }
     });
 
-    const res = await ext.getAuthorComments("اورابوراس", 1, ctx);
+    const res = await fresh.getAuthorComments("اورابوراس", 1, ctx);
+    expect(res.comments[0].id).toBe("60202");
+    expect(res.comments[0].images).toBeUndefined();
+    expect(requested).not.toContain("CHAPTER-PAGE");
+  });
+
+  it("still shows images that are inline in the comment body", async () => {
+    const fresh = loadExtension("site.truthnovel.js");
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/comments": () => ({
+        status: 200, ok: true, headers: { "x-wp-total": "1", "x-wp-totalpages": "1" },
+        text: JSON.stringify([{
+          id: 60203, post: 11065, parent: 0, author_name: "n", date: "2026-09-22T19:56:42",
+          content: { rendered: '<p>hi</p><img src="https://truthnovel.top/wp-content/uploads/2026/09/inline.jpg" />' },
+          link: "https://truthnovel.top/2456-x/#comment-60203"
+        }])
+      }),
+      "/wp-json/wp/v2/posts?include=": () => ok(JSON.stringify([
+        { id: 11065, title: { rendered: "2456 -الكائنات" }, link: "https://truthnovel.top/2456-x/" }
+      ]))
+    });
+    const res = await fresh.getAuthorComments("n", 1, ctx);
     expect(res.comments[0].images).toEqual([
-      "https://truthnovel.top/wp-content/uploads/2026/09/g.9.gif"
+      "https://truthnovel.top/wp-content/uploads/2026/09/inline.jpg"
     ]);
   });
 

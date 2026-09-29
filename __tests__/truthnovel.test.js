@@ -264,11 +264,70 @@ describe("site:truthnovel extension", () => {
     expect(ajaxHits).toBe(0);
   });
 
+  it("returns attached images with the counts, since REST never carries them", async () => {
+    // wpDiscuz keeps attached images OUTSIDE the comment body and renders them
+    // as a sibling of the text, so `content.rendered` from REST has no <img> at
+    // all. Verified live: 3 comments had attachment blocks on the chapter page
+    // while 0 of the same comments had an image in REST. The only place they
+    // exist is the chapter markup — the same markup the counts come from, so
+    // this costs no extra request.
+    const fresh = loadExtension("site.truthnovel.js");
+    const CH = "https://truthnovel.top/2432-decision/";
+    // Real markup shape: href comes BEFORE the class, and the block is a
+    // sibling of wpd-comment-text, introduced by data-comment-id.
+    const attach = (id, url) =>
+      `<div class='wmu-comment-attachments' data-comment-id='${id}'>` +
+      `<div class='wmu-attached-images wmu-count-single'>` +
+      `<div class='wmu-attachment'><a href='${url}' class='wmu-attached-image-link wmu-lightbox'>` +
+      `<img src='${url}' class='attachment'></a></div></div></div>`;
+    let ajaxBody = "";
+    const ctx = mockCtx({
+      "/wp-json/tn/v1/author-comments": () => ok(JSON.stringify({
+        total: 1, has_more: false,
+        data: [{ id: 700, post: 2432, author_name: "n", date: "2026-09-12T19:02:45", content: { rendered: "<p>x</p>" }, link: CH + "#comment-700" }]
+      })),
+      "/wp-json/wp/v2/posts?include=": () => ok(JSON.stringify([
+        { id: 2432, title: { rendered: "2432 -قرار" }, link: CH }
+      ])),
+      "/wp-admin/admin-ajax.php": (url, init) => {
+        ajaxBody = String((init && init.body) || "");
+        if (ajaxBody.includes("wpdGetNonce")) {
+          return ok(JSON.stringify({ success: true, data: { wpdiscuz_nonce: "n1" } }));
+        }
+        return ok(JSON.stringify({
+          success: true,
+          data: {
+            is_show_load_more: false,
+            comment_list:
+              `<div class="wpd-comment-text"><p>text</p></div>${attach(700, "https://truthnovel.top/wp-content/uploads/a.jpg")}` +
+              `<div class="wpd-comment-text"><p>no images here</p></div>` +
+              attach(701, "https://truthnovel.top/wp-content/uploads/b.jpg") +
+              attach(701, "https://truthnovel.top/wp-content/uploads/c.jpg")
+          }
+        }));
+      }
+    });
+
+    await fresh.getAuthorComments("n", 1, ctx);
+    const res = await fresh.getCommentVotes(CH, ["700", "701", "702"], ctx);
+
+    // Images come back per comment, deduped and in order.
+    expect(res.images["700"]).toEqual(["https://truthnovel.top/wp-content/uploads/a.jpg"]);
+    expect(res.images["701"]).toEqual([
+      "https://truthnovel.top/wp-content/uploads/b.jpg",
+      "https://truthnovel.top/wp-content/uploads/c.jpg"
+    ]);
+    // A comment with no attachments gets no entry rather than an empty list.
+    expect("702" in res.images).toBe(false);
+    // The counts still come from the very same single request.
+    expect(ajaxBody).toContain("action=wpdLoadMoreComments");
+  });
+
   it("has valid metadata", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.8.0");
+    expect(ext.version).toBe("1.9.0");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });

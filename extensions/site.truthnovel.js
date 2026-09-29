@@ -142,6 +142,61 @@ function _knownVotes(id) {
   return typeof v === "number" ? v : undefined;
 }
 
+// comment id -> attached image URLs, learned from the same chapter markup that
+// carries the vote counts.
+var _commentImages = {};
+
+/**
+ * wpDiscuz attached images, per comment, out of a chapter's comment markup.
+ *
+ * WHY THIS IS NEEDED: these images are NOT in the comment body. The plugin
+ * stores them separately and renders them at display time as a sibling of the
+ * text:
+ *
+ *   <div class="wpd-comment-text"><p>...</p></div>
+ *   <div class='wmu-comment-attachments' data-comment-id='61458'>
+ *     <div class='wmu-attached-images ...'>
+ *       <a href='....jpg' class='wmu-attached-image-link ...'><img ...></a>
+ *
+ * The REST API returns `comment_content` only, so `content.rendered` has no
+ * <img> at all and a profile card can never show these. Verified on the live
+ * site: 3 comments carried attachment blocks on the page while 0 of the same
+ * comments had an image in REST. Only the chapter markup has them, and the
+ * markup arrives with the counts anyway — so this costs no extra request.
+ */
+function _extractAttachments(commentList) {
+  var found = {};
+  if (!commentList) return found;
+  // Each attachment block is introduced by its owning comment id, and runs
+  // until the next one, so slice the markup on those boundaries.
+  var marks = [];
+  var re = /data-comment-id='(\d+)'/g;
+  var m;
+  while ((m = re.exec(commentList)) !== null) marks.push({ id: m[1], at: m.index });
+  for (var i = 0; i < marks.length; i++) {
+    var seg = commentList.slice(marks[i].at, marks[i + 1] ? marks[i + 1].at : commentList.length);
+    // Guard against a block that carries no images, and against one that runs
+    // past its own segment into the next comment's.
+    if (seg.indexOf("wmu-attached-images") === -1) continue;
+    var urls = [];
+    var href = /<a\s+href='(https?:\/\/[^']+\.(?:jpe?g|png|gif|webp))'/g;
+    var h;
+    while ((h = href.exec(seg)) !== null) {
+      if (urls.indexOf(h[1]) === -1) urls.push(h[1]);
+      if (urls.length >= 4) break;
+    }
+    if (!urls.length) continue;
+    // MERGE rather than assign: one comment can carry more than one attachment
+    // container, and assigning would let the last one drop the earlier images.
+    var existing = found[marks[i].id] || (found[marks[i].id] = []);
+    for (var u = 0; u < urls.length; u++) {
+      if (existing.indexOf(urls[u]) === -1 && existing.length < 4) existing.push(urls[u]);
+    }
+  }
+  for (var id in found) _commentImages[id] = found[id];
+  return found;
+}
+
 // chapter URL -> post id, learned for free from the batched `include=` request
 // the profile already makes to resolve chapter titles. Lets getCommentVotes
 // address a chapter by URL without fetching the page just to read its post id.
@@ -188,7 +243,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.8.0",
+  version: "1.9.0",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -1071,13 +1126,13 @@ registerExtension({
     }
     // Nothing to fill in, or no way to address the chapter: say so rather than
     // spending a request to return the counts we already had.
-    if (!key || !want.length) return { ok: true, counts: {} };
+    if (!key || !want.length) return { ok: true, counts: {}, images: {} };
     // The post id comes from the batched `include=` call getAuthorComments
     // already made for the chapter titles, so this costs nothing extra. A cold
     // map (restored session) cannot guess it without the chapter page, and
     // refusing beats silently paying 239 KB.
     var postId = _postIdForLink(key);
-    if (!postId) return { ok: true, counts: {} };
+    if (!postId) return { ok: true, counts: {}, images: {} };
 
     var nonce = await _getNonce(ctx);
     var body = "action=wpdLoadMoreComments&postId=" + encodeURIComponent(postId)
@@ -1094,14 +1149,21 @@ registerExtension({
       throw new Error("رفض الموقع جلب الإعجابات");
     }
     // Bank first, then answer: the whole chapter's set comes back, so counts
-    // for comments nobody asked about are kept for the next profile open.
-    _rememberVotes(data && data.data ? data.data.comment_list : "");
+    // AND attachments for comments nobody asked about are kept for the next
+    // profile open. The attachments ride along in this same markup, so images
+    // cost no request beyond the one the counts already needed.
+    var markup = data && data.data ? data.data.comment_list : "";
+    _rememberVotes(markup);
+    _extractAttachments(markup);
     var counts = {};
+    var images = {};
     for (var j = 0; j < want.length; j++) {
       var known = _knownVotes(want[j]);
       if (known !== undefined) counts[want[j]] = known;
+      var imgs = _commentImages[want[j]];
+      if (imgs && imgs.length) images[want[j]] = imgs;
     }
-    return { ok: true, counts: counts };
+    return { ok: true, counts: counts, images: images };
   },
 
   getCategories: async function () {

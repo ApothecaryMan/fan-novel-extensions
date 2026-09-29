@@ -47,18 +47,18 @@
  *   "total": 94,                  <- exact, for this author only
  *   "has_more": true,
  *   "data": [ { id, author_name, content: { rendered }, link, date_gmt,
- *               parent, post }, ... ]
+ *               parent, post, likes }, ... ]
  * }
  *
  * The shape deliberately mirrors core's wp/v2/comments rows, so the app's
- * existing parsing (chapter titles, reply quotes, vote counts) works unchanged.
+ * existing parsing (chapter titles, reply quotes) works unchanged.
  *
- * LIKE COUNTS ARE DELIBERATELY ABSENT. wpDiscuz keeps its rating in comment
- * meta whose key is not exposed through REST, so any guess here would return a
- * confident 0 for every comment — exactly the bug this endpoint is fixing. The
- * app already shows exact counts for chapters the reader has opened, and gets
- * an exact one back from a vote. Add the field later only once the key is
- * confirmed on this install.
+ * `likes` is the wpDiscuz rating read straight from comment meta — the one
+ * thing the REST API cannot do, and the reason the app showed a confident 0
+ * for every comment it had not measured. It is `null` (not 0) when this install
+ * does not store the rating under the expected key, so the app can tell
+ * "unliked" from "unmeasured" and fall back to asking the site directly. See
+ * tn_comment_rating() below, including the filter to change the meta key.
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -93,6 +93,34 @@ function tn_register_author_comments_route() {
 			),
 		)
 	);
+}
+
+/**
+ * A comment's wpDiscuz rating, or NULL when this install does not store it
+ * under the expected meta key.
+ *
+ * The null is the important part. Returning 0 for "key absent" would tell the
+ * app that a comment nobody ever liked has zero likes — true by accident, and
+ * a lie for any comment that DOES have likes stored elsewhere. The app treats a
+ * JSON null as "unknown" and renders no number, then falls back to fetching the
+ * count itself. A real rating of 0 still comes back as 0, because 0 is a
+ * legitimate tally and the key exists.
+ *
+ * If your install stores the rating under a different key, that is a one-line
+ * change here (or a filter, no plugin edit needed):
+ *
+ *     add_filter( 'tn_author_comments_rating_key', fn() => 'your_meta_key' );
+ *
+ * VERIFY after activating: request the endpoint and check that a comment you
+ * know has likes reports a number, not null.
+ */
+function tn_comment_rating( $comment_id ) {
+	$key = apply_filters( 'tn_author_comments_rating_key', 'wpdiscuz_rating' );
+	if ( ! metadata_exists( 'comment', $comment_id, $key ) ) {
+		return null;
+	}
+	$value = get_comment_meta( $comment_id, $key, true );
+	return is_numeric( $value ) ? (int) $value : null;
 }
 
 function tn_author_comments( WP_REST_Request $request ) {
@@ -147,6 +175,7 @@ function tn_author_comments( WP_REST_Request $request ) {
 			'date_gmt'    => (string) $row->comment_date_gmt,
 			'parent'      => (int) $row->comment_parent,
 			'post'        => (int) $row->comment_post_ID,
+			'likes'       => tn_comment_rating( (int) $row->comment_ID ),
 		);
 	}
 

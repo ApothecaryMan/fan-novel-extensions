@@ -142,6 +142,21 @@ function _knownVotes(id) {
   return typeof v === "number" ? v : undefined;
 }
 
+// chapter URL -> post id, learned for free from the batched `include=` request
+// the profile already makes to resolve chapter titles. Lets getCommentVotes
+// address a chapter by URL without fetching the page just to read its post id.
+var _postIdByLink = {};
+
+/** Links drift by trailing slash / anchor; compare on the stable part only. */
+function _linkKey(url) {
+  return String(url || "").split("#")[0].split("?")[0].replace(/\/+$/, "").toLowerCase();
+}
+
+function _postIdForLink(url) {
+  var id = _postIdByLink[_linkKey(url)];
+  return id ? String(id) : "";
+}
+
 // Total-views state (module cache, lives while the runtime is alive):
 // post IDs + summed views. Cold fill crawls tiny _fields=id REST pages;
 // warm refreshes resolve ONLY new chapters from the chapter feed.
@@ -173,7 +188,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.7.0",
+  version: "1.8.0",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -1036,6 +1051,59 @@ registerExtension({
     return { ok: true, likes: likes, liked: d.curUserReaction === 1 || d.curUserReaction === "1" };
   },
 
+  // ---------------------------------------------------------------
+  // Vote COUNTS for a set of comments on one chapter, without voting
+  // and without the chapter page.
+  //
+  // WHY NOT THE CHAPTER PAGE: it is 239 KB and mostly chapter text. The
+  // wpDiscuz "load more" action returns the chapter's ENTIRE comment set as
+  // comment-only markup — measured 117 KB for a 39-comment chapter, with all
+  // 39 counts extracted — and needs no anchor to return the complete set. So
+  // one request covers every comment on the chapter, and a chapter is only ever
+  // fetched once because the counts are banked in `_voteCounts`.
+  // ---------------------------------------------------------------
+  getCommentVotes: async function (chapterUrl, commentIds, ctx) {
+    var key = _linkKey(chapterUrl);
+    var want = [];
+    for (var i = 0; commentIds && i < commentIds.length; i++) {
+      var id = String(commentIds[i]);
+      if (id) want.push(id);
+    }
+    // Nothing to fill in, or no way to address the chapter: say so rather than
+    // spending a request to return the counts we already had.
+    if (!key || !want.length) return { ok: true, counts: {} };
+    // The post id comes from the batched `include=` call getAuthorComments
+    // already made for the chapter titles, so this costs nothing extra. A cold
+    // map (restored session) cannot guess it without the chapter page, and
+    // refusing beats silently paying 239 KB.
+    var postId = _postIdForLink(key);
+    if (!postId) return { ok: true, counts: {} };
+
+    var nonce = await _getNonce(ctx);
+    var body = "action=wpdLoadMoreComments&postId=" + encodeURIComponent(postId)
+      + "&lastCommentId=0&wpdiscuz_nonce=" + encodeURIComponent(nonce);
+    var res = await ctx.xFetch(this._absUrl("/wp-admin/admin-ajax.php"), {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+      body: body
+    });
+    if (!res.ok) throw new Error("تعذر جلب الإعجابات: " + res.status);
+    var data;
+    try { data = JSON.parse(res.text); } catch (e) { throw new Error("رد غير متوقع من الموقع"); }
+    if (data && data.success === false) {
+      throw new Error("رفض الموقع جلب الإعجابات");
+    }
+    // Bank first, then answer: the whole chapter's set comes back, so counts
+    // for comments nobody asked about are kept for the next profile open.
+    _rememberVotes(data && data.data ? data.data.comment_list : "");
+    var counts = {};
+    for (var j = 0; j < want.length; j++) {
+      var known = _knownVotes(want[j]);
+      if (known !== undefined) counts[want[j]] = known;
+    }
+    return { ok: true, counts: counts };
+  },
+
   getCategories: async function () {
     return [{ name: "فانتازيا", slug: "fantasy" }];
   },
@@ -1080,6 +1148,7 @@ registerExtension({
         if (!p || !p.id) continue;
         var t = p.title && (p.title.rendered || p.title);
         map[p.id] = { title: cleanText(t), link: p.link || "" };
+        if (p.link) _postIdByLink[_linkKey(p.link)] = p.id;
       }
     } catch (e) { /* non-fatal: cards fall back to the number label */ }
     return map;
@@ -1233,6 +1302,7 @@ registerExtension({
 
     var comments = [];
     var totalLikes = 0;
+    var allCounted = true;
     for (var j = 0; j < filtered.length; j++) {
       var c = filtered[j];
       var postInfo = postMap[c.post] || {};
@@ -1262,15 +1332,27 @@ registerExtension({
         chapterUrl: chapterUrl,
         images: images.length > 0 ? images.slice(0, 4) : undefined
       };
-      // `likes` is set ONLY when we actually know the number (from the reader
-      // path, or from an earlier vote). The field is otherwise absent, which
-      // the host renders as "no count". The old code wrote a hardcoded 0 for
-      // every comment, so any card whose chapter it had not scraped displayed
-      // a confident, wrong zero.
-      var known = _knownVotes(c.id);
+      // `likes` is set ONLY when we actually know the number. The field is
+      // otherwise absent, which the host renders as "no count". The old code
+      // wrote a hardcoded 0 for every comment, so any card whose chapter it had
+      // not scraped displayed a confident, wrong zero.
+      //
+      // The site's endpoint (Tier 1) is authoritative and wins over the cache,
+      // which can be minutes stale after other readers vote. JSON `null` from
+      // PHP is not a number, so a plugin that cannot read the rating meta falls
+      // through to the cache instead of reporting a fabricated 0.
+      var known = (typeof c.likes === "number" && isFinite(c.likes))
+        ? c.likes
+        : _knownVotes(c.id);
       if (known !== undefined) {
         entry.likes = known;
         totalLikes += known;
+      } else {
+        // One unknown card makes the PAGE total unknown too, not just that
+        // card. Summing the known ones and calling it the author's total
+        // understates it, and the header would sit directly above a list
+        // showing a different (larger) sum.
+        allCounted = false;
       }
       // WP REST parent id (0 = top-level). Kept so the host can show the
       // original comment inside reply cards; resolved below.
@@ -1285,23 +1367,28 @@ registerExtension({
     // shows without the quote).
     await self._attachParentQuotes(comments, cleanText, ctx);
 
-    // Counts are NOT fetched here any more.
+    // Counts are NOT fetched here.
     //
-    // This block used to download up to 10 whole chapter pages (~195 KB each,
-    // ~1.95 MB per profile open) purely to re-scrape wpDiscuz vote totals —
-    // and still got it wrong for every comment past the 10-chapter cap, which
-    // silently rendered as a hardcoded 0. The reader path already parses that
-    // identical page and banks every count into `_voteCounts`, so a chapter you
-    // have opened is known here for free and forever. Anything not in that map
-    // is reported WITHOUT a `likes` key, and the host draws no number rather
-    // than a wrong one. Tapping the heart on such a card returns the exact
-    // count and banks it for next time.
+    // This block used to download up to 10 whole chapter pages (~239 KB each,
+    // ~2.4 MB per profile open) purely to re-scrape wpDiscuz vote totals — and
+    // still got it wrong for every comment past the 10-chapter cap, which
+    // silently rendered as a hardcoded 0.
+    //
+    // Two things now supply counts, and neither guesses:
+    //   1. The site's own endpoint (docs/tn-author-comments-endpoint.php)
+    //      returns `likes` per comment when that plugin is installed.
+    //   2. `getCommentVotes` pulls one chapter's whole comment set on demand
+    //      (117 KB of comment markup, no chapter text) and banks it in
+    //      `_voteCounts`, so each chapter is fetched at most once per session.
+    // A card with no count in `_voteCounts` reports NO `likes` key, and the host
+    // draws no number rather than a wrong one.
     return {
       authorName: name,
       totalComments: total > 0 ? total : comments.length,
-      // Sum of what is actually known, not a guess. A partial total is honest;
-      // the old code summed a mix of real and fabricated zeros.
-      totalLikes: totalLikes,
+      // null = "not every count on this page is known". A partial sum reported
+      // as the author's total is a smaller wrong number rather than no number,
+      // which is the same class of lie the per-card 0 was. The host renders "—".
+      totalLikes: allCounted ? totalLikes : null,
       comments: comments,
       hasMore: hasMore === true
     };

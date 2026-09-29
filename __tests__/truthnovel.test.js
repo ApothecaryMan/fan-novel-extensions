@@ -210,11 +210,65 @@ describe("site:truthnovel extension", () => {
     expect(res.totalComments).toBe(1039);
   });
 
+  it("fetches a chapter's vote counts without the chapter page", async () => {
+    // The point of this method: 117 KB of comment markup instead of a 239 KB
+    // chapter page that is mostly text, and the whole chapter's set at once.
+    const fresh = loadExtension("site.truthnovel.js");
+    const CH = "https://truthnovel.top/2432-decision/";
+    const votes = (id, n) => `<div id="comment-${id}"><span class="wpd-vote-result" title='${n}'></span></div>`;
+    let ajaxBody = "";
+    const ctx = mockCtx({
+      // Warm the link -> post id map the way a profile load does.
+      "/wp-json/tn/v1/author-comments": () => ok(JSON.stringify({
+        total: 1, has_more: false,
+        data: [{ id: 700, post: 2432, author_name: "n", date: "2026-09-12T19:02:45", content: { rendered: "<p>x</p>" }, link: CH + "#comment-700" }]
+      })),
+      "/wp-json/wp/v2/posts?include=": () => ok(JSON.stringify([
+        { id: 2432, title: { rendered: "2432 -قرار" }, link: CH }
+      ])),
+      "/wp-admin/admin-ajax.php": (url, init) => {
+        ajaxBody = String((init && init.body) || "");
+        if (ajaxBody.includes("wpdGetNonce")) {
+          return ok(JSON.stringify({ success: true, data: { wpdiscuz_nonce: "n1" } }));
+        }
+        return ok(JSON.stringify({
+          success: true,
+          data: { is_show_load_more: false, comments_count: 3, comment_list: votes(700, 12) + votes(701, 0) + votes(702, 5) }
+        }));
+      }
+    });
+
+    await fresh.getAuthorComments("n", 1, ctx);
+    const res = await fresh.getCommentVotes(CH, ["700", "701", "702"], ctx);
+
+    // One request, addressed by post id resolved from the titles batch.
+    expect(ajaxBody).toContain("action=wpdLoadMoreComments");
+    expect(ajaxBody).toContain("postId=2432");
+    // Only the ids asked for come back, not the whole session cache.
+    expect(res.counts).toEqual({ 700: 12, 701: 0, 702: 5 });
+    // A comment nobody asked about is still banked for the next open.
+    const after = await fresh.getAuthorComments("n", 1, ctx);
+    expect(after.comments[0].likes).toBe(12);
+  });
+
+  it("spends no request when the chapter cannot be addressed", async () => {
+    // A cold link -> post id map cannot be resolved without the chapter page,
+    // and paying 239 KB to find an id is worse than reporting nothing.
+    const fresh = loadExtension("site.truthnovel.js");
+    let ajaxHits = 0;
+    const ctx = mockCtx({
+      "/wp-admin/admin-ajax.php": () => { ajaxHits += 1; return ok("{}"); }
+    });
+    const res = await fresh.getCommentVotes("https://truthnovel.top/2432-x/", ["700"], ctx);
+    expect(res.counts).toEqual({});
+    expect(ajaxHits).toBe(0);
+  });
+
   it("has valid metadata", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.7.0");
+    expect(ext.version).toBe("1.8.0");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -660,7 +714,73 @@ describe("site:truthnovel extension", () => {
     });
     const res = await fresh.getAuthorComments("n", 1, ctx);
     expect("likes" in res.comments[0]).toBe(false);
-    expect(res.totalLikes).toBe(0);
+    // The total is unknown for the same reason the card is, and the host draws
+    // "—" for it. A 0 here would have claimed nobody liked anything.
+    expect(res.totalLikes).toBeNull();
+  });
+
+  it("reports a total only when every comment on the page is counted", async () => {
+    // The header sits directly above the list, so a partial sum would disagree
+    // with the cards under it. Null is the only honest middle answer.
+    const fresh = loadExtension("site.truthnovel.js");
+    const row = (id, post) => ({
+      id, post, author_name: "n", date: "2026-09-12T19:02:45",
+      content: { rendered: "<p>hi</p>" }, link: `https://truthnovel.top/${post}-c/#comment-${id}`
+    });
+    const ctx = mockCtx({
+      "/wp-json/tn/v1/author-comments": () => ok(JSON.stringify({
+        total: 2, has_more: false,
+        data: [{ ...row(801, 2432), likes: 4 }, row(802, 2433)]
+      })),
+      "/wp-json/wp/v2/posts?include=": () => ok(JSON.stringify([
+        { id: 2432, title: { rendered: "1 -أ" }, link: "https://truthnovel.top/2432-c/" },
+        { id: 2433, title: { rendered: "2 -ب" }, link: "https://truthnovel.top/2433-c/" }
+      ]))
+    });
+    // The endpoint only rated the first comment, so the second is unknown.
+    const partial = await fresh.getAuthorComments("n", 1, ctx);
+    expect(partial.comments[0].likes).toBe(4);
+    expect("likes" in partial.comments[1]).toBe(false);
+    expect(partial.totalLikes).toBeNull();
+
+    // Rating both makes the total reportable.
+    const both = loadExtension("site.truthnovel.js");
+    const full = mockCtx({
+      "/wp-json/tn/v1/author-comments": () => ok(JSON.stringify({
+        total: 2, has_more: false,
+        data: [{ ...row(801, 2432), likes: 4 }, { ...row(802, 2433), likes: 6 }]
+      })),
+      "/wp-json/wp/v2/posts?include=": () => ok(JSON.stringify([
+        { id: 2432, title: { rendered: "1 -أ" }, link: "https://truthnovel.top/2432-c/" },
+        { id: 2433, title: { rendered: "2 -ب" }, link: "https://truthnovel.top/2433-c/" }
+      ]))
+    });
+    const res = await both.getAuthorComments("n", 1, full);
+    expect(res.totalLikes).toBe(10);
+  });
+
+  it("reads counts off the site's endpoint, ahead of the session cache", async () => {
+    // The endpoint is authoritative; the cache can be minutes stale after other
+    // readers vote. A JSON null (plugin could not read the meta) must NOT be
+    // taken as a count of zero.
+    const fresh = loadExtension("site.truthnovel.js");
+    const ctx = mockCtx({
+      "/wp-json/tn/v1/author-comments": () => ok(JSON.stringify({
+        total: 2, has_more: false,
+        data: [
+          { id: 901, post: 2432, author_name: "n", date: "2026-09-12T19:02:45", content: { rendered: "<p>a</p>" }, link: "https://truthnovel.top/2432-c/#comment-901", likes: 20 },
+          { id: 902, post: 2432, author_name: "n", date: "2026-09-12T19:02:45", content: { rendered: "<p>b</p>" }, link: "https://truthnovel.top/2432-c/#comment-902", likes: null }
+        ]
+      })),
+      "/wp-json/wp/v2/posts?include=": () => ok(JSON.stringify([
+        { id: 2432, title: { rendered: "1 -أ" }, link: "https://truthnovel.top/2432-c/" }
+      ]))
+    });
+    const res = await fresh.getAuthorComments("n", 1, ctx);
+    expect(res.comments[0].likes).toBe(20);
+    // null is "unknown", not 0 — it must not become a fabricated zero.
+    expect(res.comments[1].likes).toBeUndefined();
+    expect(res.totalLikes).toBeNull();
   });
 
   it("reports a count the reader path already saw, with no extra request", async () => {

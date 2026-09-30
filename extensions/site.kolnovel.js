@@ -5,7 +5,7 @@ registerExtension({
   id: 'site:kolnovel',
   name: 'كول نوفيل',
   lang: 'ar',
-  version: '1.7.1',
+  version: '1.7.2',
   apiVersion: 2,
   baseUrl: 'https://kolnovel.com',
 
@@ -887,6 +887,34 @@ registerExtension({
     });
   },
 
+  // A PocketBase author record -> an absolute avatar URL, or '' when it has none.
+  //
+  // Verified against the live API: `expand.author.avatar` is a BARE FILENAME
+  // (e.g. "645cac..._.png"), and the file is served from
+  // /api/files/ + collection + recordId + filename. Sampled 50 comments: 32/32
+  // authors had an avatar and every one was a bare filename. Both the
+  // collectionId ("_pb_users_auth_") and the collectionName ("users") forms
+  // were checked and both serve the image, so collectionId is used because a
+  // display name can be renamed while the id cannot.
+  //
+  // The other shapes are handled defensively because an OAuth sign-in stores the
+  // provider's picture URL instead of uploading a file.
+  _cmtAvatar: function (rec) {
+    if (!rec) return '';
+    var raw = rec.avatar;
+    if (Array.isArray(raw)) raw = raw[0];      // multi-file field
+    if (typeof raw !== 'string') return '';
+    var v = raw.trim();
+    if (!v) return '';
+    if (/^https?:\/\//i.test(v)) return v;    // already absolute (OAuth)
+    if (v.indexOf('//') === 0) return 'https:' + v;
+    if (v.charAt(0) === '/') return this._cmtApi + v;
+    var coll = rec.collectionId || rec.collectionName;
+    if (!coll || !rec.id) return '';
+    return this._cmtApi + '/api/files/' + encodeURIComponent(coll)
+      + '/' + encodeURIComponent(rec.id) + '/' + encodeURIComponent(v);
+  },
+
   // Lexical JSON ({"root":{"children":[{"children":[{"text":...}]...}]}})
   // -> plain text. Paragraph blocks joined with blank lines; emoji nodes
   // use their alt text; unknown nodes are skipped. Falls back to
@@ -1046,6 +1074,7 @@ registerExtension({
       if (!body) continue;
       if (c.containsSpoiler) body = '[حرق] ' + body;
       var author = '—';
+      var avatar = this._cmtAvatar(c.expand && c.expand.author);
       if (c.expand && c.expand.author && c.expand.author.name) {
         author = String(c.expand.author.name).trim() || '—';
       }
@@ -1063,6 +1092,9 @@ registerExtension({
         likes: likes,
         url: fullUrl.split('#')[0] + '#comment-' + c.id
       });
+      // Only when the author actually has one, so the host can tell "no avatar"
+      // from an empty string and fall back to the letter avatar.
+      if (avatar) comments[comments.length - 1].authorAvatar = avatar;
     }
     // A reply whose parent is not in this list (deleted, empty after cleaning, or
     // beyond the page cap) would point at nothing, and the host would nest it

@@ -27,7 +27,7 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:kolnovel'));
   it('has correct name', () => expect(ext.name).toBe('كول نوفيل'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.7.1'));
+  it('has correct version', () => expect(ext.version).toBe('1.7.2'));
   it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://kolnovel.com'));
 
@@ -1187,6 +1187,54 @@ describe('getComments', () => {
     const res = await fresh.getComments(CH, ctx);
     expect(res.comments[1].createdAt).toBe(good);
     expect(Math.abs(Date.now() - res.comments[1].createdAt)).toBeGreaterThan(1000);
+  });
+
+  it('resolves the author avatar from the real PocketBase shapes', async () => {
+    // Verified live against cmtapi.kolnovel.com: `expand.author.avatar` is a
+    // BARE FILENAME and the file is served from /api/files/<coll>/<id>/<file>.
+    // 32 of 32 sampled authors had one. A wrong URL form would 404 silently and
+    // look exactly like "avatars do not work".
+    const fresh = loadExtension('site.kolnovel.js');
+    const API = 'https://cmtapi.kolnovel.com';
+    const rec = { avatar: '645cac_x.png', collectionId: '_pb_users_auth_', collectionName: 'users', id: 'fhzs25k2u2dyf5p' };
+    // Bare filename -> the files path, using collectionId (a rename-stable key).
+    expect(fresh._cmtAvatar(rec))
+      .toBe(`${API}/api/files/_pb_users_auth_/fhzs25k2u2dyf5p/645cac_x.png`);
+    // An OAuth sign-in stores the provider's URL instead of uploading a file.
+    expect(fresh._cmtAvatar({ avatar: 'https://cdn.example/p.jpg' })).toBe('https://cdn.example/p.jpg');
+    expect(fresh._cmtAvatar({ avatar: '//cdn.example/p.jpg' })).toBe('https://cdn.example/p.jpg');
+    expect(fresh._cmtAvatar({ avatar: '/uploads/p.jpg' })).toBe(`${API}/uploads/p.jpg`);
+    // Multi-file fields arrive as an array; the first entry wins.
+    expect(fresh._cmtAvatar({ avatar: ['a.png', 'b.png'], collectionId: 'c', id: 'i' }))
+      .toBe(`${API}/api/files/c/i/a.png`);
+    // Nothing to build a URL from -> '' so the key is never emitted at all.
+    expect(fresh._cmtAvatar({ avatar: 'x.png' })).toBe('');           // no collection/id
+    expect(fresh._cmtAvatar({ avatar: '' })).toBe('');
+    expect(fresh._cmtAvatar({})).toBe('');
+    expect(fresh._cmtAvatar(null)).toBe('');
+  });
+
+  it('emits authorAvatar on comments that have one, and omits it otherwise', async () => {
+    const fresh = loadExtension('site.kolnovel.js');
+    const CH = 'https://kolnovel.com/ch-av/';
+    const withAvatar = (id, avatar) => ({
+      id, parentId: '', created: '2026-06-01T10:00:00.000Z', normalizedContent: 'x',
+      expand: { author: { name: 'u' + id, avatar, collectionId: '_pb_users_auth_', id: 'rec' + id } }
+    });
+    const ctx = mockCtx({
+      'ch-av/': ok(`<kol-comments slug="s" entity-title="t" entity-id="900" series-id="7"></kol-comments>`),
+      'entities/ensure': ok(JSON.stringify({ id: 'pb', commentsCount: 2 })),
+      'collections/comments/records': ok(JSON.stringify({
+        items: [withAvatar(1, 'a.png'), withAvatar(2, '')], totalPages: 1
+      })),
+      'collections/comment_net/records': ok(JSON.stringify({ items: [], totalPages: 1 }))
+    });
+    const res = await fresh.getComments(CH, ctx);
+    expect(res.comments[0].authorAvatar)
+      .toBe('https://cmtapi.kolnovel.com/api/files/_pb_users_auth_/rec1/a.png');
+    // No key at all for the author without one, so the host can tell it apart
+    // from an empty string and keep the letter avatar.
+    expect('authorAvatar' in res.comments[1]).toBe(false);
   });
 
   it('postComment and voteComment require login', async () => {

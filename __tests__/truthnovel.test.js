@@ -323,11 +323,203 @@ describe("site:truthnovel extension", () => {
     expect(ajaxBody).toContain("action=wpdLoadMoreComments");
   });
 
+  it("walks the chapter list correctly at an exact multiple of 100", async () => {
+    // THE severe one. The old code probed `per_page=1` and read
+    // `x-wp-totalpages`, which for per_page=1 is the POST count (2,500), not
+    // the page count (25). The "never probe past the end" guard could never
+    // fire, and with no short page to stop on, the crawl asked for page 26,
+    // got WordPress's 400, and threw — losing the ENTIRE chapter list.
+    const fresh = loadExtension("site.truthnovel.js");
+    const TOTAL = 2500;
+    const hits = [];
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/posts": (url) => {
+        hits.push(url);
+        const u = new URL(url);
+        const pp = +u.searchParams.get("per_page") || 10;
+        const pg = +u.searchParams.get("page") || 1;
+        const tp = Math.ceil(TOTAL / pp);
+        if (pg > tp) return ok(JSON.stringify({ code: "rest_post_invalid_page_number" }), 400);
+        const f = (u.searchParams.get("_fields") || "").split(",").filter(Boolean);
+        const list = Array.from({ length: Math.min(pp, TOTAL - (pg - 1) * pp) }, (_, i) => {
+          const id = 1000 + (pg - 1) * pp + i;
+          const row = { id, title: { rendered: `${id} -فصل` }, link: `https://truthnovel.top/${id}-x/` };
+          const out = {}; f.forEach((k) => { out[k] = row[k]; }); return out;
+        });
+        return { ...ok(JSON.stringify(list)), headers: { "x-wp-total": String(TOTAL), "x-wp-totalpages": String(tp) } };
+      }
+    });
+    const all = await fresh._allRestPosts("id,title,link", "asc", ctx);
+    expect(all.length).toBe(TOTAL);
+    // The page count came from x-wp-total on page 1: no wasted per_page=1 probe.
+    expect(hits.some((u) => /per_page=1(&|_|$)/.test(u))).toBe(false);
+    // And it stopped at the real end instead of asking for page 26.
+    expect(hits.some((u) => /[?&]page=26\b/.test(u))).toBe(false);
+  });
+
+  it("gives the whole page's comments their own vote counts", async () => {
+    // The old lazy-window regex crossed comment boundaries: a comment with no
+    // counter stole its neighbour's count AND the neighbour lost its own.
+    // Verified against the old code: comment1 -> 7, comment2 -> undefined.
+    // Exercised through getComments so this asserts real output, not internals.
+    const fresh = loadExtension("site.truthnovel.js");
+    const CH = "https://truthnovel.top/2432-x/";
+    const item = (id, body) =>
+      `<item><link>${CH}#comment-${id}</link>` +
+      `<dc:creator><![CDATA[u${id}]]></dc:creator>` +
+      `<pubDate>Mon, 01 Jun 2026 10:00:00 +0000</pubDate>` +
+      `<content:encoded><![CDATA[<p>${body}</p>]]></content:encoded></item>`;
+    // Comments come from the feed; the vote counters come from the page.
+    const feed = `<rss><channel>${item(1, "no votes")}${item(2, "seven")}${item(3, "zero")}</channel></rss>`;
+    const page =
+      '<div id="comment-1"><div class="wpd-comment-text"><p>no votes here</p></div></div>' +
+      '<div id="comment-2"><div class="wpd-comment-text"><p>seven</p></div>' +
+      "<span class=\"wpd-vote-result\" title='7'>7</span></div>" +
+      '<div id="comment-3"><div class="wpd-comment-text"><p>zero</p></div>' +
+      "<span class=\"wpd-vote-result\" title='0'>0</span></div>";
+    const ctx = mockCtx({
+      "/2432-x/feed/": () => ok(feed),
+      [CH]: () => ok(page)
+    });
+    const res = await fresh.getComments(CH, ctx);
+    const byId = Object.fromEntries(res.comments.map((c) => [c.id, c.likes]));
+    // Comment 1 has no counter, so it must not borrow a neighbour's number.
+    expect(byId["1"]).not.toBe(7);
+    // Comment 2 keeps its OWN 7 (it used to come back with nothing).
+    expect(byId["2"]).toBe(7);
+    // A genuine zero is a real tally, not "unknown".
+    expect(byId["3"]).toBe(0);
+  });
+
+  it("downloads a chapter page once even when two callers race for it", async () => {
+    // getComments and getCommentCount fire together when a chapter opens. The
+    // cache only helped requests arriving AFTER the first finished, so both
+    // missed it and downloaded the same 221 KB twice.
+    const fresh = loadExtension("site.truthnovel.js");
+    const CH = "https://truthnovel.top/2432-x/";
+    let pageDownloads = 0;
+    const ctx = mockCtx({
+      // Feed FIRST: mockCtx is first-match-wins on substring, and the feed URL
+      // contains the chapter URL, so the reverse order would swallow it.
+      "/2432-x/feed/": () => ok("<rss><channel></channel></rss>"),
+      [CH]: () => { pageDownloads += 1; return ok('<div id="comment-1"><div class="wpd-comment-text"><p>x</p></div><span class="wpd-vote-result" title=\'3\'>3</span></div>'); }
+    });
+    await Promise.all([fresh.getComments(CH, ctx), fresh.getCommentCount(CH, ctx)]);
+    expect(pageDownloads).toBe(1);
+  });
+
+  it("posts a reply at the parent's real depth, not always 2", async () => {
+    // `html` was never defined in postComment, so the depth lookup threw a
+    // ReferenceError that the catch swallowed: EVERY reply went out as depth 2.
+    // Level-3 comments really exist on this site (61480_61478 -> depth 3).
+    const fresh = loadExtension("site.truthnovel.js");
+    const CH = "https://truthnovel.top/2432-x/";
+    let sent = null;
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/posts": () => ok(JSON.stringify([{ id: 2432, link: CH }])),
+      "/2432-x/": () => ok(
+        "<div id='wpd-comm-777_0' class='comment depth-2 wpd-comment wpd_comment_level-2'></div>" +
+        "<div id='wpd-comm-778_0' class='comment depth-3 wpd-comment wpd_comment_level-3'></div>"
+      ),
+      "/wp-admin/admin-ajax.php": (url, init) => {
+        const b = String((init && init.body) || "");
+        if (b.includes("wpdGetNonce")) return ok(JSON.stringify({ success: true, data: { wpdiscuz_nonce: "n1" } }));
+        if (b.includes("wpdAddComment")) { sent = b; return ok(JSON.stringify({ success: true, data: { new_comment_id: 9001 } })); }
+        return ok("{}");
+      }
+    });
+    await fresh.postComment(CH, { author: "abcd", body: "hi", parentId: "778" }, ctx);
+    expect(new URLSearchParams(sent).get("wpd_comment_depth")).toBe("4");
+  });
+
+  it("retries once with a fresh nonce when the site says the nonce is stale", async () => {
+    // Verified live: a bad nonce answers HTTP 200 with the body
+    // "Nonce is invalid." — NOT 403 and NOT "-1". So a status check never
+    // fires and the reader just gets a JSON parse error until the 30-minute
+    // cache expires. The retry has to key on the BODY.
+    const fresh = loadExtension("site.truthnovel.js");
+    let nonceCalls = 0, voteCalls = 0;
+    const ctx = mockCtx({
+      "/wp-admin/admin-ajax.php": (url, init) => {
+        const b = String((init && init.body) || "");
+        if (b.includes("wpdGetNonce")) {
+          nonceCalls += 1;
+          return ok(JSON.stringify({ success: true, data: { wpdiscuz_nonce: "n" + nonceCalls } }));
+        }
+        voteCalls += 1;
+        // First vote attempt is rejected with the real 200 + plain-text body.
+        if (voteCalls === 1) return ok("Nonce is invalid.");
+        return ok(JSON.stringify({ success: true, data: { likeCount: 4, curUserReaction: 1 } }));
+      }
+    });
+    const res = await fresh.voteComment("https://truthnovel.top/2432-x/", { commentId: "5", vote: 1 }, ctx);
+    expect(res.likes).toBe(4);
+    expect(voteCalls).toBe(2);   // one rejection, one retry
+    expect(nonceCalls).toBe(2); // the stale nonce was dropped and refetched
+  });
+
+  it("surfaces a broken endpoint instead of silently serving the wrong total", async () => {
+    // The fallback search total is ~11x too high (1039 for an account with 94),
+    // so quietly degrading to it on a 500 is a silent wrong answer. Only a 404
+    // genuinely means "plugin not installed".
+    const fresh = loadExtension("site.truthnovel.js");
+    const broken = mockCtx({
+      // `ok()` hardcodes ok:true whatever status you pass, so a real failure
+      // response has to be spelled out.
+      "/wp-json/tn/v1/author-comments": () => ({ ok: false, status: 500, text: "boom" }),
+      "/wp-json/wp/v2/comments?search=": () => ok(JSON.stringify([]), 200)
+    });
+    await expect(fresh.getAuthorComments("n", 1, broken)).rejects.toThrow();
+
+    // 404 = plugin absent, so the legacy path is still correct behaviour.
+    const absent = mockCtx({
+      "/wp-json/tn/v1/author-comments": () => ({ ok: false, status: 404, text: JSON.stringify({ code: "rest_no_route" }) }),
+      "/wp-json/wp/v2/comments?search=": () => ({
+        ok: true, status: 200, headers: { "x-wp-total": "1", "x-wp-totalpages": "1" },
+        text: JSON.stringify([{ id: 1, post: 2432, author_name: "n", date: "2026-09-12T19:02:45", content: { rendered: "<p>x</p>" }, link: "https://truthnovel.top/2432-x/#comment-1" }])
+      }),
+      "/wp-json/wp/v2/posts?include=": () => ok(JSON.stringify([{ id: 2432, title: { rendered: "1 -أ" }, link: "https://truthnovel.top/2432-x/" }]))
+    });
+    const ok2 = await fresh.getAuthorComments("n", 1, absent);
+    expect(ok2.comments.length).toBe(1);
+  });
+
+  it("decodes &rlm; instead of leaving it as literal text", async () => {
+    // `rlm: ''` gave ''.charCodeAt(0) === NaN, the guard rejected it, and the
+    // literal "&rlm;" survived into every comment that contained one.
+    const { ext } = { ext: loadExtension("site.truthnovel.js") };
+    expect(ext._decodeEntities("a&rlm;b")).toBe("a\u200Fb");
+    expect(ext._decodeEntities("a&rlm;b")).not.toContain("rlm");
+  });
+
+  it("does not stop the latest-chapters scan at an unnumbered post", async () => {
+    // A title with no leading digits gives number 0, and 0 <= knownCount was
+    // true for every knownCount >= 0 — so one unnumbered post at the top of the
+    // descending list ended the scan and hid the newest chapters, which are
+    // exactly the ones the reader is missing.
+    const fresh = loadExtension("site.truthnovel.js");
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/posts": () => ({
+        ...ok(JSON.stringify([
+          { id: 3, title: { rendered: "إعلان" }, link: "https://truthnovel.top/3-x/", date_gmt: "2026-09-03T00:00:00" },
+          { id: 2, title: { rendered: "2 -الثاني" }, link: "https://truthnovel.top/2-x/", date_gmt: "2026-09-02T00:00:00" },
+          { id: 1, title: { rendered: "1 -الأول" }, link: "https://truthnovel.top/1-x/", date_gmt: "2026-09-01T00:00:00" }
+        ])),
+        headers: { "x-wp-total": "3", "x-wp-totalpages": "1" }
+      })
+    });
+    const found = await fresh.fetchLatestChapters("u", 1, ctx);
+    // The unnumbered post AND chapter 2 are both newer than what we had (1).
+    expect(found.map((c) => c.url)).toContain("https://truthnovel.top/3-x/");
+    expect(found.map((c) => c.url)).toContain("https://truthnovel.top/2-x/");
+    expect(found.map((c) => c.url)).not.toContain("https://truthnovel.top/1-x/");
+  });
+
   it("has valid metadata", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.9.0");
+    expect(ext.version).toBe("1.10.0");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });

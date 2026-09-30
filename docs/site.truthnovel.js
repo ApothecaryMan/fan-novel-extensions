@@ -14,6 +14,10 @@ var _CACHE_TTL_MS = 10 * 60 * 1000;
 var _CACHE_MAX_ENTRIES = 40;
 var _CACHE_MAX_BYTES = 12 * 1024 * 1024;
 var _CACHE_BYTES = 0;
+// Requests currently on the wire, keyed by URL. The cache above only dedupes
+// requests that arrive after the first has finished; this covers the ones that
+// overlap. Entries are deleted as soon as the request settles.
+var _inflight = {};
 
 /** Drop the least-recently-used entries until both ceilings are satisfied. */
 function _evictCache() {
@@ -125,14 +129,89 @@ function _getNonce(ctx) {
   });
 }
 
+/**
+ * Is this response wpDiscuz rejecting our nonce?
+ *
+ * NOT a status-code check. Verified live against truthnovel.top: a stale nonce
+ * answers **HTTP 200** with the plain-text body "Nonce is invalid." — not 403,
+ * not the "-1" that admin-ajax sometimes returns. So `if (!res.ok)` never fires
+ * and the caller only sees a JSON parse failure. The body is the signal.
+ */
+function _nonceRejected(res) {
+  if (!res) return false;
+  var text = typeof res.text === "string" ? res.text.trim() : "";
+  if (/nonce is invalid/i.test(text)) return true;
+  if (text === "-1" || text === "0") return true;
+  // Some builds answer 200 with a JSON envelope carrying the same complaint.
+  return /"success"\s*:\s*false[\s\S]{0,200}?nonce/i.test(text);
+}
+
+/**
+ * POST to admin-ajax.php, and retry ONCE with a fresh nonce if the site says
+ * the nonce is stale.
+ *
+ * The nonce lives 30 minutes in `_nonceCache`, but the site can invalidate it
+ * sooner (plugin settings change, cache purge). Without this, every vote and
+ * every post then fails until the TTL expires — up to half an hour of the
+ * reader being unable to comment.
+ *
+ * @param {(nonce: string) => string} buildBody  builds the POST body around a nonce
+ */
+function _postAjax(buildBody, ctx) {
+  var ajaxUrl = "https://truthnovel.top/wp-admin/admin-ajax.php";
+  var init = function (body) {
+    return {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+      body: body
+    };
+  };
+  return _getNonce(ctx).then(function (nonce) {
+    return ctx.xFetch(ajaxUrl, init(buildBody(nonce))).then(function (res) {
+      if (!_nonceRejected(res)) return res;
+      // Drop the stale value so _getNonce really refetches, then try once.
+      _nonceCache = null;
+      return _getNonce(ctx).then(function (fresh) {
+        if (fresh === nonce) return res; // same nonce came back: do not loop
+        return ctx.xFetch(ajaxUrl, init(buildBody(fresh)));
+      });
+    });
+  });
+}
+
+/**
+ * Split chapter markup into one segment per comment, keyed by comment id.
+ *
+ * Every per-comment lookup used to take a fixed-size character window from the
+ * comment's marker (4000 for attachments, 6000 for votes) and hope the comment
+ * was shorter than that. Two real bugs fell out of the hope:
+ *   - a comment with no vote counter picked up its NEIGHBOUR's count, and the
+ *     neighbour then lost its own (verified: comment1 -> 7, comment2 -> none);
+ *   - a comment with no attachment picked up its neighbour's photo.
+ * Slicing at the next comment's marker makes both exact, and costs nothing.
+ */
+function _commentSegments(html, markerSource) {
+  var out = {};
+  if (!html) return out;
+  var marks = [];
+  var re = new RegExp(markerSource, "g");
+  var m;
+  while ((m = re.exec(html)) !== null) marks.push({ id: m[1], at: m.index });
+  for (var i = 0; i < marks.length; i++) {
+    out[marks[i].id] = html.slice(marks[i].at, marks[i + 1] ? marks[i + 1].at : html.length);
+  }
+  return out;
+}
+
 /** Remember a count so the profile never has to refetch the chapter for it. */
 function _rememberVotes(pageHtml) {
   if (!pageHtml) return;
-  var re = /id="comment-(\d+)"[\s\S]{0,6000}?wpd-vote-result[^>]*title='(-?\d+)'/g;
-  var m;
-  while ((m = re.exec(pageHtml)) !== null) {
-    var v = parseInt(m[2], 10);
-    if (!isNaN(v) && v >= 0) _voteCounts[m[1]] = v;
+  var segs = _commentSegments(pageHtml, "id=\"comment-(\\d+)\"");
+  for (var id in segs) {
+    var hit = /wpd-vote-result[^>]*title='(-?\d+)'/.exec(segs[id]);
+    if (!hit) continue;
+    var v = parseInt(hit[1], 10);
+    if (!isNaN(v) && v >= 0) _voteCounts[id] = v;
   }
 }
 
@@ -226,24 +305,41 @@ function _fetchCachedPage(url, ctx) {
     // Touch on read so eviction is genuinely least-recently-USED, not
     // least-recently-written.
     hit.used = now;
-    return Promise.resolve({ ok: true, status: 200, text: hit.text });
+    // Headers are replayed too: a cache hit that dropped them would silently
+    // strip `X-WP-Total`, which is how the post count is learned for free.
+    return Promise.resolve({ ok: true, status: hit.status || 200, text: hit.text, headers: hit.headers });
   }
   if (hit) _CACHE_BYTES -= hit.text.length;
-  return ctx.xFetch(url).then(function (res) {
+  // IN-FLIGHT DEDUPE. The cache only helps requests that arrive AFTER the
+  // first one finished. Opening a chapter fires getComments and
+  // getCommentCount together, so both missed an empty cache and downloaded
+  // the same 221 KB page twice. Keying the pending promise means the second
+  // caller awaits the first one's bytes instead of starting its own.
+  var pending = _inflight[url];
+  if (pending) return pending;
+  var p = ctx.xFetch(url).then(function (res) {
+    delete _inflight[url];
     if (res.ok && typeof res.text === "string") {
-      _htmlCache[url] = { text: res.text, ts: now, used: now };
+      _htmlCache[url] = { text: res.text, ts: now, used: now, headers: res.headers, status: res.status };
       _CACHE_BYTES += res.text.length;
       _evictCache();
     }
     return res;
+  }, function (err) {
+    // Never leave a rejected promise memoised, or this URL is dead for the
+    // rest of the session.
+    delete _inflight[url];
+    throw err;
   });
+  _inflight[url] = p;
+  return p;
 }
 
 registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.9.0",
+  version: "1.10.0",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -264,7 +360,12 @@ registerExtension({
     var named = {
       amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
       hellip: '…', ndash: '–', mdash: '—', lsquo: '‘', rsquo: '’',
-      ldquo: '“', rdquo: '”', middot: '·', bull: '•', copy: '©', reg: '®', trade: '™', rlm: ''
+      ldquo: '“', rdquo: '”', middot: '·', bull: '•', copy: '©', reg: '®', trade: '™',
+      // Right-to-left MARK, U+200F. Written as the escape on purpose: as an
+      // empty string it produced ''.charCodeAt(0) === NaN, the guard below
+      // rejected it, and the literal text "&rlm;" was left in every comment
+      // that contained one. WordPress emits it around Latin/number mixes.
+      rlm: '\u200F'
     };
     var res = String(str).replace(/&amp;/gi, '&');
     res = res.replace(/&([a-zA-Z][a-zA-Z0-9]*|#[xX]?[0-9a-fA-F]+);/g, function (m, name) {
@@ -563,39 +664,55 @@ registerExtension({
    * 10-minute-cached list page and feed, so a second full crawl inside the TTL
    * cost nothing, while this re-downloaded all 26 pages (593 KB) every time.
    */
-  _restPosts: async function (page, fields, order, ctx) {
+  /**
+   * One page of posts, plus the total post count from the SAME response.
+   *
+   * `X-WP-Total` on a `per_page=100` request is the true post count, so the
+   * page count is derivable from it for free. The old code instead issued a
+   * second `per_page=1` request and read `X-WP-TotalPages` — which for
+   * `per_page=1` is the POST count, not the page count. That guard could never
+   * fire, and at an exact multiple of 100 the crawl had no short page to stop
+   * on, so it requested page N+1, got WordPress's 400, and threw: the whole
+   * chapter list failed at 2,500 posts.
+   */
+  _restPostsPage: async function (page, fields, order, ctx) {
     var url = this._absUrl("/wp-json/wp/v2/posts?per_page=100&orderby=id&order="
       + (order || "asc") + "&page=" + page + "&_fields=" + fields);
     var r = await _fetchCachedPage(url, ctx);
     if (!r || !r.ok || !r.text) return null;
+    var list = null;
     try {
       var arr = JSON.parse(r.text);
-      return Array.isArray(arr) ? arr : null;
+      if (Array.isArray(arr)) list = arr;
     } catch (e) { return null; }
+    if (!list) return null;
+    var hdr = r.headers
+      ? (r.headers["x-wp-total"] || r.headers["X-WP-Total"])
+      : null;
+    var total = hdr ? parseInt(hdr, 10) : 0;
+    return { list: list, total: isNaN(total) || total < 0 ? 0 : total };
+  },
+
+  _restPosts: async function (page, fields, order, ctx) {
+    var res = await this._restPostsPage(page, fields, order, ctx);
+    return res ? res.list : null;
   },
 
   /**
-   * Every post, in waves of 8. Stops on the first short page, and uses
-   * `x-wp-totalpages` when available so it never probes past the end.
+   * Every post, in waves of 8. Stops on the first short page, and uses the
+   * page count derived from page 1's `X-WP-Total` so it never probes past the
+   * end. The short-page rule stays as the backstop for a missing header.
    */
   _allRestPosts: async function (fields, order, ctx) {
     var self = this;
-    var first = await self._restPosts(1, fields, order, ctx);
+    var firstRes = await self._restPostsPage(1, fields, order, ctx);
+    var first = firstRes ? firstRes.list : null;
     if (!first || !first.length) return [];
     var out = first.slice();
     if (first.length < 100) return out;
 
-    // The total-pages header is the cheapest way to learn the page count.
-    // It is an optimisation only — without it we walk until a short page,
-    // which is the same rule _viewsAllIds already relies on.
-    var totalPages = 0;
-    try {
-      var probe = await ctx.xFetch(self._absUrl("/wp-json/wp/v2/posts?per_page=1&_fields=id"));
-      var hdr = probe && probe.headers
-        ? (probe.headers["x-wp-totalpages"] || probe.headers["X-WP-TotalPages"])
-        : null;
-      totalPages = hdr ? parseInt(hdr, 10) : 0;
-    } catch (e) { /* fine */ }
+    // Free: the header came with the page-1 request we already made.
+    var totalPages = firstRes.total > 0 ? Math.ceil(firstRes.total / 100) : 0;
 
     var next = 2;
     while (next < 400) {
@@ -685,7 +802,13 @@ registerExtension({
       var allNew = true;
       for (var i = 0; i < first.length; i++) {
         var ch = self._postToChapter(first[i], found.length);
-        if (ch.number <= knownCount) { reachedKnown = true; allNew = false; break; }
+        // Only a post with a REAL number can be compared against what we already
+        // have. A title with no leading digits yields number 0, and 0 <= knownCount
+        // is true for every knownCount >= 0 — so a single unnumbered post (a
+        // notice, a promo) at the top of the descending list used to end the
+        // scan immediately and hide the newest chapters, which are exactly the
+        // ones the reader is missing.
+        if (ch.number > 0 && ch.number <= knownCount) { reachedKnown = true; allNew = false; break; }
         found.push(ch);
       }
       if (reachedKnown || first.length < 100 || !allNew) break;
@@ -935,21 +1058,20 @@ registerExtension({
     // RSS feed — merge them from the page by data-comment-id.
     try {
       if (pageHtml) {
+        // Bounded by the next comment, not by a character count: see
+        // _commentSegments for the two bugs the fixed windows caused.
         var attachMap = {};
-        var attRe = /data-comment-id='(\d+)'/g;
-        var attM;
-        while ((attM = attRe.exec(pageHtml)) !== null) {
-          var aid = attM[1];
-          var awin = pageHtml.substr(attM.index, 4000);
-          var urls = awin.match(/https?:\/\/truthnovel\.top\/wp-content\/uploads\/[^'"()\s]+?\.(?:gif|jpe?g|png|webp|bmp)/gi);
-          if (urls) {
-            var uniq = [];
-            for (var ui = 0; ui < urls.length && uniq.length < 4; ui++) {
-              if (uniq.indexOf(urls[ui]) === -1) uniq.push(urls[ui]);
-            }
-            if (uniq.length > 0) attachMap[aid] = uniq;
+        var attachSegs = _commentSegments(pageHtml, "data-comment-id='(\\d+)'");
+        for (var aid in attachSegs) {
+          var urls = attachSegs[aid].match(/https?:\/\/truthnovel\.top\/wp-content\/uploads\/[^'"()\s]+?\.(?:gif|jpe?g|png|webp|bmp)/gi);
+          if (!urls) continue;
+          var uniq = [];
+          for (var ui = 0; ui < urls.length && uniq.length < 4; ui++) {
+            if (uniq.indexOf(urls[ui]) === -1) uniq.push(urls[ui]);
           }
+          if (uniq.length > 0) attachMap[aid] = uniq;
         }
+        var ownSegs = _commentSegments(pageHtml, "id=\"comment-(\\d+)\"");
         for (var vi = 0; vi < comments.length; vi++) {
           var cid = comments[vi].id;
           if (attachMap[cid]) {
@@ -960,10 +1082,9 @@ registerExtension({
             }
             comments[vi].images = dedup;
           }
-          var idx = pageHtml.indexOf('id="comment-' + cid + '"');
-          if (idx === -1) continue;
-          var window_ = pageHtml.substr(idx, 6000);
-          var vm = window_.match(/wpd-vote-result[^>]*title='(-?\d+)'/);
+          var own = ownSegs[cid];
+          if (!own) continue;
+          var vm = /wpd-vote-result[^>]*title='(-?\d+)'/.exec(own);
           if (vm) {
             var v = parseInt(vm[1], 10);
             if (!isNaN(v) && v >= 0) comments[vi].likes = v;
@@ -1026,33 +1147,46 @@ registerExtension({
     var parentRaw = input && input.parentId ? String(input.parentId).replace(/\D/g, "") : "";
     var ajaxUrl = this._absUrl("/wp-admin/admin-ajax.php");
     // 1) Nonce (cached — see _getNonce; wpDiscuz does not embed it in the HTML)
-    var nonce = await _getNonce(ctx);
     // 2) Threading: top-level 0_0/depth 1; reply {parent}_0/depth parent+1
     var uniqueId = "0_0";
     var depth = "1";
     if (parentRaw) {
       uniqueId = parentRaw + "_0";
       depth = "2";
+      // The parent's real level, so replying to a nested comment does not
+      // flatten the thread.
+      //
+      // This used to read a variable named `html` that was NEVER DEFINED in
+      // this function, so it threw ReferenceError on every reply and the
+      // catch swallowed it — every reply was posted as depth 2 no matter how
+      // deep the parent was. Verified on the live site that level-3 comments
+      // exist (`61480_61478` -> depth 3), so this was visibly wrong.
+      //
+      // The reader is looking at this chapter in order to reply, so getComments
+      // has already pulled the page and this is a cache hit, not a download.
       try {
-        var lvlM = html.match(new RegExp("wpd-comm-" + parentRaw + "[^']*'[^>]*wpd_comment_level-(\\d)"));
-        if (lvlM) {
-          var pd = parseInt(lvlM[1], 10);
-          if (!isNaN(pd) && pd >= 1 && pd < 5) depth = String(pd + 1);
+        var pageRes = await _fetchCachedPage(fullUrl, ctx);
+        if (pageRes && pageRes.ok && pageRes.text) {
+          var lvlM = new RegExp("wpd-comm-" + parentRaw
+            + "[^']*'[^>]*wpd_comment_level-(\\d)").exec(pageRes.text);
+          if (lvlM) {
+            var pd = parseInt(lvlM[1], 10);
+            // parent level 1..4 -> our depth 2..5. Anything else keeps 2,
+            // which is the correct answer for a top-level parent anyway.
+            if (!isNaN(pd) && pd >= 1 && pd < 5) depth = String(pd + 1);
+          }
         }
       } catch (e2) { /* keep depth 2 */ }
     }
-    var params = "action=wpdAddComment&postId=" + encodeURIComponent(postId)
-      + "&wpdiscuz_unique_id=" + encodeURIComponent(uniqueId)
-      + "&wpdiscuz_nonce=" + encodeURIComponent(nonce)
-      + "&wc_comment=" + encodeURIComponent(body)
-      + "&wc_name=" + encodeURIComponent(author)
-      + "&wc_email=" + encodeURIComponent(email)
-      + "&wc_website=&wpd_comment_depth=" + encodeURIComponent(depth);
-    var res = await ctx.xFetch(ajaxUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-      body: params
-    });
+    var res = await _postAjax(function (nonce) {
+      return "action=wpdAddComment&postId=" + encodeURIComponent(postId)
+        + "&wpdiscuz_unique_id=" + encodeURIComponent(uniqueId)
+        + "&wpdiscuz_nonce=" + encodeURIComponent(nonce)
+        + "&wc_comment=" + encodeURIComponent(body)
+        + "&wc_name=" + encodeURIComponent(author)
+        + "&wc_email=" + encodeURIComponent(email)
+        + "&wc_website=&wpd_comment_depth=" + encodeURIComponent(depth);
+    }, ctx);
     if (!res.ok) throw new Error("فشل إرسال التعليق: " + res.status);
     var data;
     try { data = JSON.parse(res.text); } catch (e) { throw new Error("رد غير متوقع من الموقع"); }
@@ -1080,15 +1214,11 @@ registerExtension({
     var ajaxUrl = this._absUrl("/wp-admin/admin-ajax.php");
     // Cached nonce: this used to be its own request on every single vote,
     // doubling the cost of tapping a heart.
-    var nonce = await _getNonce(ctx);
-    var params = "action=wpdVoteOnComment&commentId=" + encodeURIComponent(rawId)
-      + "&voteType=" + encodeURIComponent(vote)
-      + "&wpdiscuz_nonce=" + encodeURIComponent(nonce);
-    var res = await ctx.xFetch(ajaxUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-      body: params
-    });
+    var res = await _postAjax(function (nonce) {
+      return "action=wpdVoteOnComment&commentId=" + encodeURIComponent(rawId)
+        + "&voteType=" + encodeURIComponent(vote)
+        + "&wpdiscuz_nonce=" + encodeURIComponent(nonce);
+    }, ctx);
     if (!res.ok) throw new Error("فشل التصويت: " + res.status);
     var data;
     try { data = JSON.parse(res.text); } catch (e) { throw new Error("رد غير متوقع من الموقع"); }
@@ -1134,14 +1264,10 @@ registerExtension({
     var postId = _postIdForLink(key);
     if (!postId) return { ok: true, counts: {}, images: {} };
 
-    var nonce = await _getNonce(ctx);
-    var body = "action=wpdLoadMoreComments&postId=" + encodeURIComponent(postId)
-      + "&lastCommentId=0&wpdiscuz_nonce=" + encodeURIComponent(nonce);
-    var res = await ctx.xFetch(this._absUrl("/wp-admin/admin-ajax.php"), {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-      body: body
-    });
+    var res = await _postAjax(function (nonce) {
+      return "action=wpdLoadMoreComments&postId=" + encodeURIComponent(postId)
+        + "&lastCommentId=0&wpdiscuz_nonce=" + encodeURIComponent(nonce);
+    }, ctx);
     if (!res.ok) throw new Error("تعذر جلب الإعجابات: " + res.status);
     var data;
     try { data = JSON.parse(res.text); } catch (e) { throw new Error("رد غير متوقع من الموقع"); }
@@ -1328,9 +1454,16 @@ registerExtension({
     try {
       res = await _fetchCachedPage(url, ctx);
     } catch (e) {
-      return null;
+      throw new Error("تعذر الاتصال بالخادم: " + (e && e.message ? e.message : ""));
     }
-    if (!res || !res.ok) return null;
+    // ONLY a 404 means "plugin not installed" -> fall back to the legacy search.
+    // Anything else means the endpoint IS installed and failing, and falling
+    // back silently would serve the search total instead: 1039 for an account
+    // with 94. That was this function's own documented intent, contradicted by
+    // its own code, which swallowed every failure.
+    if (!res) throw new Error("تعذر جلب تعليقات المعلق");
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error("فشل الخادم: " + res.status);
     var body;
     try { body = JSON.parse(res.text); } catch (e) { return null; }
     if (!body || !Array.isArray(body.data)) return null;

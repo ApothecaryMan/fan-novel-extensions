@@ -5,7 +5,7 @@ registerExtension({
   id: 'site:kolnovel',
   name: 'كول نوفيل',
   lang: 'ar',
-  version: '1.7.0',
+  version: '1.7.1',
   apiVersion: 2,
   baseUrl: 'https://kolnovel.com',
 
@@ -806,13 +806,52 @@ registerExtension({
   // Write/vote require a KolNovel login (PocketBase auth), so postComment
   // and voteComment throw a clear message.
   // ---------------------------------------------------------------
+  // Per-chapter comment state: the <kol-comments> tag and the entity UUID.
+  // Both are tiny (a few hundred bytes) and never change for a chapter, but
+  // the reader fires getComments and getCommentCount together the moment a
+  // chapter opens, and each used to download the whole ~150 KB chapter page and
+  // POST its own `ensure` just to read them.
+  _cmtState: { tags: Object.create(null), ensure: Object.create(null) },
+  _CMT_STATE_MAX: 500,
+  _CMT_ENSURE_TTL: 5 * 60 * 1000,
+  _CMT_PAGES_CAP: 5,
+
+  _cmtKey: function (url) {
+    var s = String(url || '').split('#')[0].split('?')[0].replace(/\/+$/, '');
+    try { s = decodeURI(s); } catch (e) { /* keep encoded */ }
+    return s.toLowerCase();
+  },
+
+  // One in-flight promise per key, so two concurrent callers share one request.
+  _cmtOnce: function (key, make) {
+    var flight = this._cmtState.flight || (this._cmtState.flight = Object.create(null));
+    if (flight[key]) return flight[key];
+    var p = make().then(
+      function (v) { delete flight[key]; return v; },
+      function (e) { delete flight[key]; throw e; }
+    );
+    flight[key] = p;
+    return p;
+  },
+
+  // <kol-comments ...> -> {slug,title,wpPostId,wpSeriesId} | null.
+  //
+  // Two bugs the old `/<kol-comments\s+([^>]*?)>/` had:
+  //   - `[^>]*?` stops at the FIRST ">" anywhere, so a chapter title containing
+  //     ">" truncated the tag before entity-id. wpPostId then failed to parse
+  //     and the chapter silently reported zero comments, with no error.
+  //   - it only accepted double-quoted attribute values, so a single-quoted
+  //     entity-id read as absent.
+  // This alternation consumes whole quoted values, so a ">" inside one is safe,
+  // and it requires an attribute boundary so "slug" cannot match inside "x-slug".
   _cmtTag: function (html) {
-    var m = html.match(/<kol-comments\s+([^>]*?)>/i);
+    var m = html.match(/<kol-comments\b((?:[^>"']|"[^"]*"|'[^']*')*)>/i);
     if (!m) return null;
     var attrs = m[1];
     var get = function (name) {
-      var r = attrs.match(new RegExp(name + '\\s*=\\s*"([^"]*)"', 'i'));
-      return r ? r[1] : '';
+      var r = attrs.match(new RegExp('(?:^|\\s)' + name + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s"\'>]+))', 'i'));
+      if (!r) return '';
+      return r[1] !== undefined ? r[1] : (r[2] !== undefined ? r[2] : (r[3] || ''));
     };
     var wpPostId = parseInt(get('entity-id'), 10);
     if (isNaN(wpPostId) || wpPostId <= 0) return null;
@@ -824,6 +863,28 @@ registerExtension({
       wpPostId: wpPostId,
       wpSeriesId: wpSeriesId
     };
+  },
+
+  // The tag identifies the chapter and never changes, so fetch it once per
+  // chapter instead of once per caller.
+  _cmtTagFor: function (fullUrl, ctx) {
+    var self = this, st = self._cmtState, key = self._cmtKey(fullUrl);
+    var hit = st.tags[key];
+    if (hit) return Promise.resolve(hit);
+    return self._cmtOnce('tag:' + key, async function () {
+      var pageRes = await self._safeFetch(fullUrl, ctx, 'فشل جلب صفحة الفصل');
+      if (!pageRes.ok) throw new Error('فشل جلب صفحة الفصل: ' + pageRes.status);
+      var tag = self._cmtTag(pageRes.text || '');
+      // A MISSING tag is not cached: it may be a transient bad page, and
+      // caching "no comments" would stick for the whole session.
+      if (tag) {
+        if (self._CMT_STATE_MAX && Object.keys(st.tags).length >= self._CMT_STATE_MAX) {
+          st.tags = Object.create(null);
+        }
+        st.tags[key] = tag;
+      }
+      return tag;
+    });
   },
 
   // Lexical JSON ({"root":{"children":[{"children":[{"text":...}]...}]}})
@@ -875,77 +936,109 @@ registerExtension({
   },
 
   // Shared entity-ensure step: chapter page tag -> PocketBase entity UUID
-  // (+ commentsCount). Used by both getComments and getCommentCount.
-  _cmtEnsure: async function (fullUrl, tag, ctx) {
-    return this._cmtJson(this._cmtApi + '/api/kol/entities/ensure', ctx, 'فشل تجهيز التعليقات', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        slug: tag.slug || '',
-        title: tag.title || '',
-        url: fullUrl,
-        wpPostId: tag.wpPostId,
-        wpPostType: 'post',
-        wpSeriesId: tag.wpSeriesId
-      })
+  // (+ commentsCount). Cached briefly and shared between concurrent callers.
+  _cmtEnsure: function (fullUrl, tag, ctx) {
+    var self = this, st = self._cmtState, key = self._cmtKey(fullUrl);
+    var hit = st.ensure[key];
+    if (hit && Date.now() - hit.ts < self._CMT_ENSURE_TTL) return Promise.resolve(hit.value);
+    return self._cmtOnce('ens:' + key, async function () {
+      var value = await self._cmtJson(self._cmtApi + '/api/kol/entities/ensure', ctx, 'فشل تجهيز التعليقات', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          slug: tag.slug || '',
+          title: tag.title || '',
+          url: fullUrl,
+          wpPostId: tag.wpPostId,
+          wpPostType: 'post',
+          wpSeriesId: tag.wpSeriesId
+        })
+      });
+      if (value && value.id) {
+        if (self._CMT_STATE_MAX && Object.keys(st.ensure).length >= self._CMT_STATE_MAX) {
+          st.ensure = Object.create(null);
+        }
+        st.ensure[key] = { ts: Date.now(), value: value };
+      }
+      return value;
     });
   },
 
-  // Count-only fast path for the reader badge: page + ensure POST carry
-  // commentsCount — no records/net fetches, no comment parsing.
+  // Every item of one PocketBase collection: page 1, then the remaining pages
+  // IN PARALLEL (they were fetched one after another).
+  //
+  // Applied to BOTH collections. comment_net used to read page 1 ONLY, so on any
+  // chapter past 100 comments every later comment was reported with a confident
+  // 0 likes — the same invented zero that was removed from the reader profile.
+  _cmtPaged: async function (collection, filter, extra, ctx, label) {
+    var self = this;
+    var base = self._cmtApi + '/api/collections/' + collection + '/records?perPage=100'
+      + extra + '&filter=' + filter + '&page=';
+    var first = await self._cmtJson(base + 1, ctx, label);
+    var items = (first && first.items) || [];
+    var totalPages = Math.min((first && first.totalPages) || 1, self._CMT_PAGES_CAP);
+    if (totalPages < 2) return items;
+    var jobs = [];
+    for (var p = 2; p <= totalPages; p++) jobs.push(self._cmtJson(base + p, ctx, label));
+    var rest = await Promise.all(jobs);
+    for (var r = 0; r < rest.length; r++) {
+      if (rest[r] && rest[r].items) items = items.concat(rest[r].items);
+    }
+    return items;
+  },
+
+  // Count-only fast path for the reader badge: tag + ensure carry commentsCount,
+  // so no records fetch and no comment parsing. After the chapter has been opened
+  // once this costs nothing at all.
   getCommentCount: async function (chapterUrl, ctx) {
     var fullUrl = this._absUrl(chapterUrl);
-    var pageRes = await this._safeFetch(fullUrl, ctx, 'فشل جلب صفحة الفصل');
-    if (!pageRes.ok) throw new Error('فشل جلب عدد التعليقات: ' + pageRes.status);
-    var tag = this._cmtTag(pageRes.text || '');
+    var tag = await this._cmtTagFor(fullUrl, ctx);
     if (!tag) return { count: 0 };
     var ensure = await this._cmtEnsure(fullUrl, tag, ctx);
-    var total = ensure && ensure.commentsCount ? parseInt(ensure.commentsCount, 10) : 0;
-    return { count: isNaN(total) || total < 0 ? 0 : total };
+    return { count: this._cmtCount(ensure && ensure.commentsCount) };
+  },
+
+  _cmtCount: function (v) {
+    var n = parseInt(v, 10);
+    return isNaN(n) || n < 0 ? 0 : n;
   },
 
   getComments: async function (chapterUrl, ctx) {
     var fullUrl = this._absUrl(chapterUrl);
-    var pageRes = await this._safeFetch(fullUrl, ctx, 'فشل جلب صفحة الفصل');
-    if (!pageRes.ok) throw new Error('فشل جلب صفحة الفصل: ' + pageRes.status);
-    var tag = this._cmtTag(pageRes.text || '');
+    var tag = await this._cmtTagFor(fullUrl, ctx);
     if (!tag) return { count: 0, comments: [] };
 
     var ensure = await this._cmtEnsure(fullUrl, tag, ctx);
     var pbId = ensure && ensure.id;
     if (!pbId) return { count: 0, comments: [] };
-    var total = ensure.commentsCount || 0;
+    // A number, not whatever the API typed it as: the host compares this against
+    // a list length, and a string would break that comparison silently.
+    var total = this._cmtCount(ensure.commentsCount);
 
     var filter = encodeURIComponent('entity="' + pbId + '"');
-    var list = await this._cmtJson(
-      this._cmtApi + '/api/collections/comments/records?page=1&perPage=100&sort=created&expand=author&filter=' + filter,
-      ctx, 'فشل جلب التعليقات');
-    var items = (list && list.items) || [];
-    // Paginate when a chapter exceeds one page (cap 500 to bound requests).
-    var totalPages = (list && list.totalPages) || 1;
-    for (var p = 2; p <= Math.min(totalPages, 5); p++) {
-      var extra = await this._cmtJson(
-        this._cmtApi + '/api/collections/comments/records?page=' + p + '&perPage=100&sort=created&expand=author&filter=' + filter,
-        ctx, 'فشل جلب التعليقات');
-      if (extra && extra.items) items = items.concat(extra.items);
-    }
+    // Comments and vote counts are independent, so fetch them together.
+    var both = await Promise.all([
+      this._cmtPaged('comments', filter, '&sort=created&expand=author', ctx, 'فشل جلب التعليقات'),
+      this._cmtPaged('comment_net', filter, '', ctx, 'فشل جلب الإعجابات').catch(function () { return null; })
+    ]);
+    var items = both[0] || [];
+    var nets = both[1]; // null = the vote table failed; likes then stay unknown-as-0
 
     var netMap = {};
-    try {
-      var net = await this._cmtJson(
-        this._cmtApi + '/api/collections/comment_net/records?page=1&perPage=100&filter=' + filter,
-        ctx, 'فشل جلب الإعجابات');
-      var nets = (net && net.items) || [];
-      for (var n = 0; n < nets.length; n++) {
-        var row = nets[n];
-        var key = row.comment || row.id;
-        var v = parseInt(typeof row.net !== 'undefined' ? row.net : row.likes, 10);
-        if (isNaN(v) || v < 0) v = 0;
-        if (key) netMap[key] = v;
-      }
-    } catch (e2) { /* non-fatal: likes stay 0 */ }
+    for (var n = 0; n < nets.length; n++) {
+      var row = nets[n];
+      var key = row.comment || row.id;
+      var v = parseInt(typeof row.net !== 'undefined' ? row.net : row.likes, 10);
+      if (isNaN(v) || v < 0) v = 0;
+      if (key) netMap[key] = v;
+    }
 
     var comments = [];
+    var present = {};
+    // Rows arrive sorted by `created`, so an unparseable date is almost certainly
+    // next to a good one. Stamping it Date.now() put it in the present and
+    // sorted it as the newest comment on the chapter.
+    var lastGood = 0;
     for (var i = 0; i < items.length; i++) {
       var c = items[i];
       if (!c || c.isDeleted) continue;
@@ -956,10 +1049,11 @@ registerExtension({
       if (c.expand && c.expand.author && c.expand.author.name) {
         author = String(c.expand.author.name).trim() || '—';
       }
-      var createdAt = Date.parse(c.created || '');
-      if (isNaN(createdAt)) createdAt = Date.now();
+      var createdAt = this._cmtTime(c.created);
+      if (isNaN(createdAt)) createdAt = lastGood; else lastGood = createdAt;
       var likes = netMap[c.id];
       if (typeof likes !== 'number') likes = 0;
+      present[String(c.id)] = true;
       comments.push({
         id: String(c.id),
         parentId: c.parentId ? String(c.parentId) : null,
@@ -970,9 +1064,25 @@ registerExtension({
         url: fullUrl.split('#')[0] + '#comment-' + c.id
       });
     }
+    // A reply whose parent is not in this list (deleted, empty after cleaning, or
+    // beyond the page cap) would point at nothing, and the host would nest it
+    // under a comment it cannot find. Show it as top-level instead.
+    for (var k = 0; k < comments.length; k++) {
+      if (comments[k].parentId && !present[comments[k].parentId]) comments[k].parentId = null;
+    }
     comments.sort(function (a, b) { return a.createdAt - b.createdAt; });
     if (!total) total = comments.length;
     return { count: total, comments: comments };
+  },
+
+  // PocketBase writes dates as "2026-06-01 10:00:00.123Z" — a space, not the "T"
+  // of ISO 8601. V8 parses both identically (verified), so this only matters for
+  // a runtime that is stricter; it costs nothing to normalise.
+  _cmtTime: function (raw) {
+    var s = String(raw || '').trim();
+    if (!s) return NaN;
+    var t = Date.parse(s.replace(' ', 'T'));
+    return isNaN(t) ? Date.parse(s) : t;
   },
 
   postComment: async function () {

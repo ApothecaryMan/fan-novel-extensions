@@ -27,7 +27,7 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:kolnovel'));
   it('has correct name', () => expect(ext.name).toBe('كول نوفيل'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.7.0'));
+  it('has correct version', () => expect(ext.version).toBe('1.7.1'));
   it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://kolnovel.com'));
 
@@ -1027,6 +1027,166 @@ describe('getComments', () => {
     expect(res.comments.length).toBe(1);
     expect(res.comments[0].body).toBe('نص بديل');
     expect(res.comments[0].likes).toBe(0);
+  });
+
+  // ── The six fixes ──────────────────────────────────────────────────
+
+  it('reads vote counts past the first 100 comments', async () => {
+    // comment_net used to request `page=1&perPage=100` ONLY, so on a chapter
+    // with more than 100 comments every later row got a confident 0 likes.
+    // The comments table was paged; the vote table was not.
+    const fresh = loadExtension('site.kolnovel.js');
+    const CH = 'https://kolnovel.com/ch-big/';
+    const TAG = `<kol-comments slug="s" entity-title="t" entity-id="900" series-id="7"></kol-comments>`;
+    const row = (i) => ({
+      id: `c${i}`, parentId: '', created: '2026-06-01T10:00:00.000Z',
+      normalizedContent: `تعليق ${i}`, text: '',
+      expand: { author: { name: `user${i}` } }
+    });
+    const ctx = mockCtx({
+      'ch-big/': () => ok(TAG),
+      'entities/ensure': () => ok(JSON.stringify({ id: 'pb-1', commentsCount: 250 })),
+      'collections/comments/records': (url) => {
+        const pg = Number(new URL(url).searchParams.get('page') || 1);
+        const start = (pg - 1) * 100;
+        const n = Math.max(0, Math.min(100, 250 - start)); // last page is short
+        const items = Array.from({ length: n }, (_, k) => row(start + k + 1));
+        return ok(JSON.stringify({ items, page: pg, totalItems: 250, totalPages: 3 }));
+      },
+      'collections/comment_net/records': (url) => {
+        const pg = Number(new URL(url).searchParams.get('page') || 1);
+        // Only every third comment has a vote row, on purpose.
+        const items = Array.from({ length: 100 }, (_, k) => {
+          const n = (pg - 1) * 100 + k + 1;
+          return n % 3 === 0 ? { comment: `c${n}`, net: n } : null;
+        }).filter(Boolean);
+        return ok(JSON.stringify({ items, page: pg, totalItems: 84, totalPages: 3 }));
+      }
+    });
+    const res = await fresh.getComments(CH, ctx);
+    expect(res.comments.length).toBe(250);
+    const byId = Object.fromEntries(res.comments.map((c) => [c.id, c.likes]));
+    // Past the first 100 the old code reported 0 for EVERY later comment,
+    // because comment_net was only ever asked for page 1.
+    expect(byId.c102).toBe(102);  // page 2
+    expect(byId.c201).toBe(201);  // page 3
+    // A comment with no vote row is genuinely unliked, not a missing page.
+    expect(byId.c1).toBe(0);
+    expect(byId.c101).toBe(0);
+  });
+
+  it('reads the tag when the chapter title contains ">"', async () => {
+    // `[^>]*?` stopped at the first ">" anywhere, so a title with one truncated
+    // the tag before entity-id. wpPostId then failed to parse and the chapter
+    // silently reported ZERO comments with no error at all.
+    const fresh = loadExtension('site.kolnovel.js');
+    const CH = 'https://kolnovel.com/ch-gt/';
+    const ctx = mockCtx({
+      'ch-gt/': () => ok(`<kol-comments slug="s" entity-title="الفصل 1 &gt; البداية" entity-id="900" series-id="7"></kol-comments>`),
+      'entities/ensure': (url, init) => {
+        const sent = JSON.parse(init.body);
+        expect(sent.wpPostId).toBe(900); // reached the ensure call at all
+        return ok(JSON.stringify({ id: 'pb-1', commentsCount: 1 }));
+      },
+      'collections/comments/records': () => ok(JSON.stringify({
+        items: [{ id: 'c1', parentId: '', created: '2026-06-01T10:00:00.000Z', normalizedContent: 'x', expand: { author: { name: 'u' } } }],
+        totalPages: 1
+      })),
+      'collections/comment_net/records': () => ok(JSON.stringify({ items: [], totalPages: 1 }))
+    });
+    const res = await fresh.getComments(CH, ctx);
+    expect(res.comments.length).toBe(1);
+  });
+
+  it('reads single-quoted and unquoted tag attributes', async () => {
+    // The old attribute reader only accepted double quotes, so a single-quoted
+    // entity-id read as absent and the chapter reported zero comments.
+    const fresh = loadExtension('site.kolnovel.js');
+    const single = loadExtension('site.kolnovel.js');
+    const base = { 'entities/ensure': () => ok(JSON.stringify({ id: 'pb', commentsCount: 0 })) };
+    const s1 = mockCtx({ 'ch-a/': () => ok(`<kol-comments slug='s' entity-title='t' entity-id='900' series-id='7'></kol-comments>`), ...base });
+    expect(await single.getCommentCount('https://kolnovel.com/ch-a/', s1)).toEqual({ count: 0 });
+    // And an attribute name must not match inside another name ("x-slug").
+    const s2 = mockCtx({ 'ch-b/': () => ok(`<kol-comments x-slug="decoy" entity-title="t" entity-id=900 series-id="7"></kol-comments>`), ...base });
+    expect((await fresh.getCommentCount('https://kolnovel.com/ch-b/', s2)).count).toBe(0);
+  });
+
+  it('downloads the chapter page once when the badge and the list race', async () => {
+    // getComments and getCommentCount fire together on chapter open. Each used
+    // to fetch the whole ~150 KB page for the tag and POST its own `ensure`.
+    const fresh = loadExtension('site.kolnovel.js');
+    const CH = 'https://kolnovel.com/ch-race/';
+    let pages = 0, ensures = 0;
+    const ctx = mockCtx({
+      'ch-race/': () => { pages += 1; return ok(`<kol-comments slug="s" entity-title="t" entity-id="900" series-id="7"></kol-comments>`); },
+      'entities/ensure': () => { ensures += 1; return ok(JSON.stringify({ id: 'pb', commentsCount: 1 })); },
+      'collections/comments/records': () => ok(JSON.stringify({
+        items: [{ id: 'c1', parentId: '', created: '2026-06-01T10:00:00.000Z', normalizedContent: 'x', expand: { author: { name: 'u' } } }],
+        totalPages: 1
+      })),
+      'collections/comment_net/records': () => ok(JSON.stringify({ items: [], totalPages: 1 }))
+    });
+    await Promise.all([fresh.getComments(CH, ctx), fresh.getCommentCount(CH, ctx)]);
+    expect(pages).toBe(1);
+    expect(ensures).toBe(1);
+  });
+
+  it('reports the comment count as a number, not whatever the API typed', async () => {
+    // The old line was `ensure.commentsCount || 0` with no conversion, so a
+    // string count reached the host, where it is compared against a list length.
+    const fresh = loadExtension('site.kolnovel.js');
+    const CH = 'https://kolnovel.com/ch-str/';
+    const ctx = mockCtx({
+      'ch-str/': () => ok(`<kol-comments slug="s" entity-title="t" entity-id="900" series-id="7"></kol-comments>`),
+      'entities/ensure': () => ok(JSON.stringify({ id: 'pb', commentsCount: '250' })),
+      'collections/comments/records': () => ok(JSON.stringify({ items: [], totalPages: 1 })),
+      'collections/comment_net/records': () => ok(JSON.stringify({ items: [], totalPages: 1 }))
+    });
+    const res = await fresh.getComments(CH, ctx);
+    expect(typeof res.count).toBe('number');
+    expect(res.count).toBe(250);
+  });
+
+  it('shows a reply whose parent was deleted as a top-level comment', async () => {
+    // A dangling parentId points at a comment the host cannot find, so the reply
+    // has nowhere to nest.
+    const fresh = loadExtension('site.kolnovel.js');
+    const CH = 'https://kolnovel.com/ch-del/';
+    const ctx = mockCtx({
+      'ch-del/': () => ok(`<kol-comments slug="s" entity-title="t" entity-id="900" series-id="7"></kol-comments>`),
+      'entities/ensure': () => ok(JSON.stringify({ id: 'pb', commentsCount: 1 })),
+      'collections/comments/records': () => ok(JSON.stringify({
+        items: [{ id: 'c2', parentId: 'c-deleted', created: '2026-06-01T10:00:00.000Z', normalizedContent: 'orphan', expand: { author: { name: 'u' } } }],
+        totalPages: 1
+      })),
+      'collections/comment_net/records': () => ok(JSON.stringify({ items: [], totalPages: 1 }))
+    });
+    const res = await fresh.getComments(CH, ctx);
+    expect(res.comments[0].parentId).toBeNull();
+  });
+
+  it('does not stamp an undated comment with the current time', async () => {
+    // Date.now() pinned it to the present and sorted it as the newest comment on
+    // the chapter. Rows arrive sorted by `created`, so the last good timestamp is
+    // the honest fallback.
+    const fresh = loadExtension('site.kolnovel.js');
+    const CH = 'https://kolnovel.com/ch-date/';
+    const good = Date.parse('2026-06-01T10:00:00.000Z');
+    const ctx = mockCtx({
+      'ch-date/': () => ok(`<kol-comments slug="s" entity-title="t" entity-id="900" series-id="7"></kol-comments>`),
+      'entities/ensure': () => ok(JSON.stringify({ id: 'pb', commentsCount: 2 })),
+      'collections/comments/records': () => ok(JSON.stringify({
+        items: [
+          { id: 'c1', parentId: '', created: '2026-06-01T10:00:00.000Z', normalizedContent: 'ok', expand: { author: { name: 'u' } } },
+          { id: 'c2', parentId: '', created: 'not-a-date', normalizedContent: 'bad', expand: { author: { name: 'u' } } }
+        ],
+        totalPages: 1
+      })),
+      'collections/comment_net/records': () => ok(JSON.stringify({ items: [], totalPages: 1 }))
+    });
+    const res = await fresh.getComments(CH, ctx);
+    expect(res.comments[1].createdAt).toBe(good);
+    expect(Math.abs(Date.now() - res.comments[1].createdAt)).toBeGreaterThan(1000);
   });
 
   it('postComment and voteComment require login', async () => {

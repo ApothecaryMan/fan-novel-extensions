@@ -387,7 +387,9 @@ function _fetchThreadVotes(rows, ctx) {
 }
 
 /**
- * The author's exact lifetime likes, or null when they cannot be known.
+ * The author's exact lifetime stats, or null when the set could not be fully
+ * enumerated. Returns { totalComments, totalLikes } — totalLikes is null when
+ * the count is known but the likes are not.
  *
  * `complete` means the caller already holds the author's ENTIRE comment set
  * (first page AND hasMore false), so no enumeration request is needed. Anything
@@ -403,10 +405,11 @@ function _authorLifetimeLikes(name, ctx, pageRows, complete) {
     .then(function (enumRes) {
       if (!enumRes || !enumRes.complete || !enumRes.rows.length) return null;
       if (enumRes.rows.length > _AUTHOR_MAX_COMMENTS) return null;
+      var count = enumRes.rows.length;
       return _fetchThreadVotes(enumRes.rows, ctx).then(function () {
         var sum = 0;
         var unknown = 0;
-        for (var i = 0; i < enumRes.rows.length; i++) {
+        for (var i = 0; i < count; i++) {
           var v = _knownVotes(enumRes.rows[i].id);
           if (v === undefined) unknown += 1;
           else sum += v;
@@ -415,9 +418,11 @@ function _authorLifetimeLikes(name, ctx, pageRows, complete) {
         // current wpDiscuz data and are not rendered anywhere, so they carry no
         // visible votes. Tolerate only that small tail as 0 — a large or total
         // unknown slice is the old "confident wrong number" all over.
-        if (unknown === enumRes.rows.length) return null;
-        if (unknown > 2 || unknown > enumRes.rows.length * 0.1) return null;
-        var stats = { totalLikes: sum };
+        var likes = null;
+        if (unknown !== count && unknown <= 2 && unknown <= count * 0.1) likes = sum;
+        // The exact count is known as soon as enumeration completes, even when
+        // the likes are not — so cache both together.
+        var stats = { totalComments: count, totalLikes: likes };
         _authorStats[name] = stats;
         return stats;
       });
@@ -548,7 +553,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.11.0",
+  version: "1.11.1",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -1635,8 +1640,9 @@ registerExtension({
       }
       throw new Error("فشل جلب تعليقات المعلق: " + res.status);
     }
-    // NOTE: this total is the SEARCH's total, not the author's. It is the bug
-    // the endpoint above fixes; it is kept only for the uninstalled-plugin case.
+    // NOTE: this total is the SEARCH's total, not the author's. It is only a
+    // fallback now: the endpoint above fixes it, and the client-side
+    // enumeration in _buildAuthorComments fixes it too, without the plugin.
     var totalHeader = (res.headers && (res.headers["x-wp-total"] || res.headers["X-WP-Total"])) || "0";
     var total = parseInt(totalHeader, 10);
     if (isNaN(total) || total < 0) total = 0;
@@ -1828,10 +1834,13 @@ registerExtension({
     // draws no number rather than a wrong one.
     return {
       authorName: name,
-      totalComments: total > 0 ? total : comments.length,
-      // Exact author lifetime total when it was computable; otherwise fall back
-      // to the visible-page sum, and null when even that page is not fully
-      // counted (null = "unknown", which the host renders as "—").
+      // Exact author count when the client-side enumeration succeeded; the
+      // per-page header from the endpoint/search (which overstates on the
+      // fallback path) only stands in when it did not.
+      totalComments: stats ? stats.totalComments : (total > 0 ? total : comments.length),
+      // Exact author lifetime total when computable; otherwise fall back to the
+      // visible-page sum, and null when even that page is not fully counted
+      // (null = "unknown", which the host renders as "—").
       totalLikes: stats ? stats.totalLikes : (allCounted ? totalLikes : null),
       comments: comments,
       hasMore: hasMore === true

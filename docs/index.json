@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1791136136406,
+  "generatedAt": 1791136397162,
   "extensions": [
     {
       "id": "site:cenele",
@@ -65,10 +65,10 @@
       "id": "site:truthnovel",
       "name": "رواية سيد الحقيقة",
       "lang": "ar",
-      "version": "1.11.0",
+      "version": "1.11.1",
       "apiVersion": 2,
-      "size": 82531,
-      "sha256": "d4da102d708217ba09e83e1bcd2c6276a577a835dbb3f8ce9fbf70b2a63c3805",
+      "size": 83121,
+      "sha256": "64bc67b022b014f07d8c6637d5eafc3151155c7c58089b677fe7aa84eb229c1d",
       "url": "site.truthnovel.js",
       "baseUrl": "https://truthnovel.top"
     },
@@ -97,5 +97,5 @@
       "icon": "icons/wuxiaworld.png"
     }
   ],
-  "signature": "zrk9v93GMRYiFPSpPZCeirQEmjWhTgKrtqESCLYPrcQhqgHxzr_oSiNB74_iZABMTEPOv1JsnsKwEiUFLOzYBg"
+  "signature": "xqH5-cGUjbn-Am6VlCQC-vl91W2BAZAktNFJPgnqyTii3bj1QvsaTYvVV5v2QS6FmxSD9wZde1IHvZXwm4g2Bw"
 }

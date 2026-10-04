@@ -192,7 +192,7 @@ describe("site:truthnovel extension", () => {
       "/wp-json/tn/v1/author-comments": () => ({ ok: false, status: 404, text: "" }),
       "/wp-json/wp/v2/comments?search=": () => ({
         ok: true, status: 200,
-        headers: { "x-wp-total": "1039", "x-wp-totalpages": "35" },
+        headers: { "x-wp-total": "1039", "x-wp-totalpages": "2" },
         text: JSON.stringify([
           { id: 1, author_name: "تعليق", content: { rendered: "<p>ملكي</p>" }, link: "https://truthnovel.top/1-x/#comment-1", date_gmt: "2026-09-01T10:00:00", parent: 0, post: 1 },
           { id: 2, author_name: "شخص آخر", content: { rendered: "<p>ذكر تعليق</p>" }, link: "https://truthnovel.top/1-x/#comment-2", date_gmt: "2026-09-02T10:00:00", parent: 0, post: 1 }
@@ -206,9 +206,10 @@ describe("site:truthnovel extension", () => {
     // Only the author's own row survives the client-side filter.
     expect(res.comments).toHaveLength(1);
     expect(res.comments[0].body).toBe("ملكي");
-    // The known-wrong count is still reported on this path — documented, and
-    // the reason the endpoint exists.
-    expect(res.totalComments).toBe(1039);
+    // The search header's 1039 is inflated by body matches; the client-side
+    // enumeration replaces it with the exact set (one unique comment here),
+    // even without the endpoint plugin.
+    expect(res.totalComments).toBe(1);
   });
 
   it("fetches a chapter's vote counts without the chapter page", async () => {
@@ -520,7 +521,7 @@ describe("site:truthnovel extension", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.11.0");
+    expect(ext.version).toBe("1.11.1");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -929,7 +930,9 @@ describe("site:truthnovel extension", () => {
 
     const res = await ext.getAuthorComments("اورابوراس", 1, ctx);
     expect(res.authorName).toBe("اورابوراس");
-    expect(res.totalComments).toBe(108);
+    // The search header (108) is only for the search; the exact author set is
+    // what the enumeration found (the mock repeats one row across its 4 pages).
+    expect(res.totalComments).toBe(1);
     expect(res.hasMore).toBe(true);
     expect(res.comments.length).toBe(1);
     expect(res.comments[0].id).toBe("58826");
@@ -1107,7 +1110,7 @@ describe("site:truthnovel extension", () => {
       "/wp-json/wp/v2/comments?search=": (url) => {
         const page = parseInt(new URL(url).searchParams.get("page"), 10) || 1;
         return { ok: true, status: 200,
-          headers: { "x-wp-total": "3", "x-wp-totalpages": "2" },
+          headers: { "x-wp-total": "1049", "x-wp-totalpages": "2" },
           text: JSON.stringify(rowsForPage(page)) };
       },
       "/wp-json/wp/v2/posts?include=": () => ok(JSON.stringify([
@@ -1130,6 +1133,8 @@ describe("site:truthnovel extension", () => {
     // Page 1 holds only two of the three comments, yet the header shows the
     // author's real lifetime total (2 + 5 + 1), not the page subtotal.
     expect(page1.totalLikes).toBe(8);
+    // And the exact author count, not the search header's inflated 1049.
+    expect(page1.totalComments).toBe(3);
     expect(page1.comments.find((c) => c.id === "11").likes).toBe(2);
     expect(page1.comments.find((c) => c.id === "12").likes).toBe(5);
 

@@ -249,18 +249,20 @@ function _extractAttachments(commentList) {
   // Each attachment block is introduced by its owning comment id, and runs
   // until the next one, so slice the markup on those boundaries.
   var marks = [];
-  var re = /data-comment-id='(\d+)'/g;
+  var re = /data-comment-id=['"](\d+)['"]/g;
   var m;
   while ((m = re.exec(commentList)) !== null) marks.push({ id: m[1], at: m.index });
   for (var i = 0; i < marks.length; i++) {
     var seg = commentList.slice(marks[i].at, marks[i + 1] ? marks[i + 1].at : commentList.length);
     // Guard against a block that carries no images, and against one that runs
     // past its own segment into the next comment's.
-    if (seg.indexOf("wmu-attached-images") === -1) continue;
+    if (seg.indexOf("wmu-attached-images") === -1 && seg.indexOf("wmu-attached-image-link") === -1) continue;
     var urls = [];
-    var href = /<a\s+href='(https?:\/\/[^']+\.(?:jpe?g|png|gif|webp))'/g;
+    var href = /<a\s+[^>]*href=['"](https?:\/\/[^'"]+)['"]/gi;
     var h;
     while ((h = href.exec(seg)) !== null) {
+      var p = h[1].split(/[?#]/)[0];
+      if (!/\.(jpe?g|png|gif|webp|bmp|avif)$/i.test(p)) continue;
       if (urls.indexOf(h[1]) === -1) urls.push(h[1]);
       if (urls.length >= 4) break;
     }
@@ -339,7 +341,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.10.0",
+  version: "1.10.1",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -1061,10 +1063,25 @@ registerExtension({
         // Bounded by the next comment, not by a character count: see
         // _commentSegments for the two bugs the fixed windows caused.
         var attachMap = {};
-        var attachSegs = _commentSegments(pageHtml, "data-comment-id='(\\d+)'");
-        for (var aid in attachSegs) {
-          var urls = attachSegs[aid].match(/https?:\/\/truthnovel\.top\/wp-content\/uploads\/[^'"()\s]+?\.(?:gif|jpe?g|png|webp|bmp)/gi);
-          if (!urls) continue;
+        var attachMarks = [];
+        var attachRe = new RegExp("data-comment-id=['\"](\\d+)['\"]", "g");
+        var am;
+        while ((am = attachRe.exec(pageHtml)) !== null) attachMarks.push({ id: am[1], at: am.index });
+        for (var ai = 0; ai < attachMarks.length; ai++) {
+          var aid = attachMarks[ai].id;
+          var seg = pageHtml.slice(attachMarks[ai].at, attachMarks[ai + 1] ? attachMarks[ai + 1].at : pageHtml.length);
+          var head = pageHtml.slice(Math.max(0, attachMarks[ai].at - 300), attachMarks[ai].at);
+          if (seg.indexOf("wmu-attached-images") === -1 && seg.indexOf("wmu-attached-image-link") === -1 && head.indexOf("wmu-comment-attachments") === -1) continue;
+          var urls = [];
+          var hrefRe = /<a\s+[^>]*href=['"](https?:\/\/[^'"]+)['"]/gi;
+          var hm;
+          while ((hm = hrefRe.exec(seg)) !== null) {
+            var up = hm[1].split(/[?#]/)[0];
+            if (!/\.(jpe?g|png|gif|webp|bmp|avif)$/i.test(up)) continue;
+            if (urls.indexOf(hm[1]) === -1) urls.push(hm[1]);
+            if (urls.length >= 4) break;
+          }
+          if (!urls.length) continue;
           var uniq = [];
           for (var ui = 0; ui < urls.length && uniq.length < 4; ui++) {
             if (uniq.indexOf(urls[ui]) === -1) uniq.push(urls[ui]);
@@ -1506,11 +1523,11 @@ registerExtension({
       
       var images = [];
       if (c.content && c.content.rendered) {
-        var imgMatches = c.content.rendered.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/g);
+        var imgMatches = c.content.rendered.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/gi);
         if (imgMatches) {
           for (var im = 0; im < imgMatches.length; im++) {
-            var srcM = imgMatches[im].match(/src=["'](https?:\/\/[^"']+)["']/);
-            if (srcM && srcM[1] && !/wpdiscuz|smiles|emoji/i.test(srcM[1])) {
+            var srcM = imgMatches[im].match(/src=["'](https?:\/\/[^"']+)["']/i);
+            if (srcM && srcM[1] && !/wpdiscuz|smil|emoji/i.test(srcM[1])) {
               images.push(srcM[1]);
             }
           }

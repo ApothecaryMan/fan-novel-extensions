@@ -553,7 +553,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.11.2",
+  version: "1.11.3",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -954,13 +954,29 @@ registerExtension({
   },
 
   /** A REST post row -> ChapterMeta. */
+  _parseChapterNumber: function (rawTitle) {
+    var latin = this._toLatinDigits(rawTitle || "");
+    var m = latin.match(/^(\d+(?:\.\d+)*)/);
+    if (!m) return 0;
+    var parts = m[1].split(".");
+    if (parts.length <= 2) {
+      var v = parseFloat(m[1]);
+      return isNaN(v) ? 0 : v;
+    }
+    var head = parseInt(parts[0], 10);
+    var tail = parts.slice(1).join("");
+    var frac = parseFloat("0." + tail);
+    if (isNaN(head)) return 0;
+    return head + (isNaN(frac) ? 0 : frac);
+  },
+
   _postToChapter: function (post, index) {
     var rawTitle = this._decodeEntities(this._stripTags(
       (post.title && (post.title.rendered || post.title)) || ""
     )).trim();
-    var numMatch = this._toLatinDigits(rawTitle).match(/^(\d+)/);
-    var num = numMatch ? parseInt(numMatch[1], 10) : 0;
-    var cleanTitle = rawTitle.replace(/^\d+\s*[-–:]\s*/, "").trim();
+    var num = this._parseChapterNumber(rawTitle);
+    if (!isFinite(num)) num = 0;
+    var cleanTitle = rawTitle.replace(/^\d+(?:\.\d+)*\s*[-–:]\s*/, "").trim();
     var ts = Date.parse(post.date_gmt ? post.date_gmt + "Z" : (post.date || ""));
     var ch = {
       url: this._absUrl(post.link || ""),
@@ -1064,9 +1080,8 @@ registerExtension({
       seen[chUrl] = true;
 
       var rawTitle = this._decodeEntities(this._stripTags(match[2])).trim();
-      var numMatch = this._toLatinDigits(rawTitle).match(/^(\d+)/);
-      var chNum = numMatch ? parseInt(numMatch[1], 10) : 0;
-      var cleanTitle = rawTitle.replace(/^\d+\s*[-–:]\s*/, "").trim();
+      var chNum = this._parseChapterNumber(rawTitle);
+      var cleanTitle = rawTitle.replace(/^\d+(?:\.\d+)*\s*[-–:]\s*/, "").trim();
 
       chapters.push({
         url: chUrl,
@@ -1083,8 +1098,7 @@ registerExtension({
         if (seen[fbUrl]) continue;
         seen[fbUrl] = true;
         var fbTitle = this._decodeEntities(this._stripTags(match[2])).trim();
-        var fbNumMatch = this._toLatinDigits(fbTitle).match(/^(\d+)/);
-        var fbNum = fbNumMatch ? parseInt(fbNumMatch[1], 10) : 0;
+        var fbNum = this._parseChapterNumber(fbTitle);
         chapters.push({
           url: fbUrl,
           number: fbNum,

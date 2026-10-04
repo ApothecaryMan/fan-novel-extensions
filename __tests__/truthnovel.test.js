@@ -521,7 +521,7 @@ describe("site:truthnovel extension", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.11.2");
+    expect(ext.version).toBe("1.11.3");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -560,6 +560,25 @@ describe("site:truthnovel extension", () => {
     expect(chapters[1].number).toBe(2422);
     expect(chapters[1].title).toBe("الفصل 2422 - حب اللعبة لذاتها");
     expect(chapters[1].uploadedAt).toBeGreaterThan(chapters[0].uploadedAt);
+  });
+
+  it("keeps X.5 filler chapters distinct instead of collapsing them onto X", async () => {
+    // Live defect: "1420.5 -النهاية الكبرى" parsed as 1420 via parseInt and
+    // collided with "1420 -اسلوب قتال الاكاديمية" — 13 extra rows sharing 8
+    // numbers, which also broke the COUNT-based "is there a next chapter"
+    // guess past the finale.
+    const fresh = loadExtension("site.truthnovel.js");
+    const posts = [
+      { id: 1, link: "https://truthnovel.top/1420-x/", title: { rendered: "1420 -اسلوب" }, date_gmt: "2025-06-14T21:49:55" },
+      { id: 2, link: "https://truthnovel.top/1421-x/", title: { rendered: "1420.5 -النهاية الكبرى" }, date_gmt: "2025-06-15T14:05:53" },
+      { id: 3, link: "https://truthnovel.top/1710-5-x/", title: { rendered: "1710.5 -فيلر" }, date_gmt: "2025-09-27T16:21:27" }
+    ];
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/posts?per_page=100": () => ok(JSON.stringify(posts))
+    });
+    const chapters = await fresh.parseChapterList("https://truthnovel.top/?w4pl=257", ctx);
+    expect(chapters.map((c) => c.number)).toEqual([1420, 1420.5, 1710.5]);
+    expect(new Set(chapters.map((c) => c.number)).size).toBe(3);
   });
 
   it("never invents a date for a chapter the site did not date", async () => {

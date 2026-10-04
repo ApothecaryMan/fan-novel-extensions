@@ -57,6 +57,40 @@ var _voteCounts = {};
 var _nonceCache = null;
 var _NONCE_TTL_MS = 30 * 60 * 1000;
 
+// Client-side lifetime likes per author: { totalLikes, totalComments }.
+//
+// The optional tn/v1 endpoint is per-page only, so it can never answer "how
+// many likes does this reader have in TOTAL". This map holds that answer,
+// computed from public data only (see _authorLifetimeLikes). Stored ONLY after
+// a complete enumeration, so a partial crawl is never mistaken for the truth.
+var _authorStats = {};
+// name -> in-flight crawl, so two page opens share one instead of crawling twice.
+var _authorStatsPending = {};
+// Hard stops: past either, the author's total is reported as unknown rather
+// than costing unbounded traffic or time.
+var _AUTHOR_MAX_PAGES = 20;
+var _AUTHOR_MAX_COMMENTS = 400;
+// Concurrent wpdGetSingleComment requests, and concurrent search pages during
+// enumeration. Enumeration pages are independent once X-WP-TotalPages is known,
+// so they go out together instead of one after another.
+var _AUTHOR_FETCH_CONCURRENCY = 8;
+var _AUTHOR_PAGE_CONCURRENCY = 6;
+// A 429/403 (rate limit or WAF) pauses ALL further comment fetches for this long
+// instead of hammering a site we do not own. One throttled response ends the
+// current total as unknown rather than escalating into a block.
+var _throttledUntil = 0;
+var _THROTTLE_COOLDOWN_MS = 60 * 1000;
+function _noteThrottle(res) {
+  if (res && (res.status === 429 || res.status === 403)) {
+    _throttledUntil = Date.now() + _THROTTLE_COOLDOWN_MS;
+    return true;
+  }
+  return false;
+}
+function _throttled() {
+  return Date.now() < _throttledUntil;
+}
+
 // chapter URL -> numeric post id. Small, permanent, and it makes replying to
 // the same chapter free after the first time.
 var _postIdByUrl = {};
@@ -221,6 +255,179 @@ function _knownVotes(id) {
   return typeof v === "number" ? v : undefined;
 }
 
+/**
+ * Run `fn` over every item with at most `limit` in flight, returning the results
+ * in input order. Failures resolve to undefined and never abort the batch: one
+ * dead thread must not sink a total.
+ */
+function _mapLimit(items, limit, fn) {
+  var i = 0;
+  var results = new Array(items.length);
+  function worker() {
+    if (i >= items.length) return Promise.resolve();
+    var idx = i++;
+    return Promise.resolve()
+      .then(function () { return fn(items[idx]); })
+      .then(function (r) { results[idx] = r; }, function () { results[idx] = undefined; })
+      .then(worker);
+  }
+  var runners = [];
+  for (var k = 0; k < Math.min(limit, items.length); k++) runners.push(worker());
+  return Promise.all(runners).then(function () { return results; });
+}
+
+/**
+ * Every comment this author wrote, from the public WP search endpoint.
+ *
+ * WP_Comment_Query.search matches comment_author (as well as body/email/URL/IP),
+ * so the author's own rows are all in there; body matches are dropped by the
+ * exact author_name filter. Page 1 is fetched alone to learn X-WP-TotalPages,
+ * then the rest go out in parallel. Returns { rows, complete } — `complete:false`
+ * means a page cap, the comment ceiling, or a failed page was hit, so the caller
+ * must NOT claim a total from it.
+ */
+function _enumerateAuthorComments(name, ctx) {
+  var target = String(name || "").trim().toLowerCase();
+  var fields = "&per_page=100&_fields=id,author_name,post,link,date_gmt,parent&page=";
+  var base = "https://truthnovel.top/wp-json/wp/v2/comments?search=" + encodeURIComponent(name) + fields;
+  var parse = function (res) {
+    if (!res || !res.ok) return null;
+    var list;
+    try { list = JSON.parse(res.text); } catch (e) { return null; }
+    return Array.isArray(list) ? list : null;
+  };
+  return ctx.xFetch(base + "1").then(function (res) {
+    // A throttled or failed first page means "unknown", never "empty".
+    if (_noteThrottle(res)) return { rows: [], complete: false };
+    var first = parse(res);
+    if (first === null) return { rows: [], complete: false };
+    var totalPages = parseInt(
+      res.headers && (res.headers["x-wp-totalpages"] || res.headers["X-WP-TotalPages"]), 10) || 1;
+    var lastPage = Math.min(totalPages, _AUTHOR_MAX_PAGES);
+    var complete = totalPages <= _AUTHOR_MAX_PAGES;
+    var jobs = [];
+    for (var p = 2; p <= lastPage; p++) jobs.push(p);
+    return _mapLimit(jobs, _AUTHOR_PAGE_CONCURRENCY, function (p) {
+      if (_throttled()) return null;
+      return ctx.xFetch(base + p).then(function (r) {
+        if (_noteThrottle(r)) return null;
+        return parse(r);
+      });
+    }).then(function (rest) {
+      var lists = [first];
+      for (var i = 0; i < rest.length; i++) {
+        if (rest[i] === null) complete = false;
+        else lists.push(rest[i]);
+      }
+      var rows = [];
+      var seen = {};
+      for (var l = 0; l < lists.length; l++) {
+        var list = lists[l];
+        for (var j = 0; j < list.length; j++) {
+          var it = list[j];
+          if (!it || !it.id) continue;
+          if (String(it.author_name || "").trim().toLowerCase() !== target) continue;
+          var id = String(it.id);
+          if (seen[id]) continue;
+          seen[id] = true;
+          rows.push(it);
+        }
+      }
+      if (rows.length > _AUTHOR_MAX_COMMENTS) complete = false;
+      return { rows: rows, complete: complete };
+    });
+  });
+}
+
+/**
+ * Fill in the vote counts for the given rows, in place (via _voteCounts).
+ *
+ * Uses wpDiscuz's public `wpdGetSingleComment`, which returns the whole thread
+ * the comment belongs to — measured 3.5 KB for a lone comment, 14 KB for a
+ * three-way thread — carrying each comment's `wpd-vote-result` count and any
+ * attachments. One request per still-unknown thread, at most.
+ */
+function _fetchThreadVotes(rows, ctx) {
+  var targets = [];
+  var seen = {};
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r || !r.id) continue;
+    var id = String(r.id);
+    if (seen[id]) continue;
+    seen[id] = true;
+    if (_knownVotes(id) !== undefined) continue;
+    targets.push({ id: id, post: r.post });
+  }
+  if (!targets.length) return Promise.resolve();
+  // A recent 429/403 (this session) means "leave the site alone for a while".
+  if (_throttled()) return Promise.resolve();
+  // Warm the nonce once so the batch resolves it from cache instead of firing
+  // one wpdGetNonce per concurrent request.
+  return _getNonce(ctx).then(function () {
+    return _mapLimit(targets, _AUTHOR_FETCH_CONCURRENCY, function (t) {
+      if (!t.post || _throttled()) return undefined;
+      return _postAjax(function (nonce) {
+        return "action=wpdGetSingleComment&commentId=" + encodeURIComponent(t.id)
+          + "&postId=" + encodeURIComponent(t.post)
+          + "&wpdiscuz_nonce=" + encodeURIComponent(nonce);
+      }, ctx).then(function (res) {
+        if (_noteThrottle(res)) return;
+        if (!res || !res.ok) return;
+        var data;
+        try { data = JSON.parse(res.text); } catch (e) { return; }
+        if (!data || data.success === false) return;
+        var markup = data.data && typeof data.data.message === "string" ? data.data.message : "";
+        if (!markup) return;
+        _rememberVotes(markup);
+        _extractAttachments(markup);
+      });
+    });
+  }).catch(function () { /* non-fatal: the page still renders without counts */ });
+}
+
+/**
+ * The author's exact lifetime likes, or null when they cannot be known.
+ *
+ * `complete` means the caller already holds the author's ENTIRE comment set
+ * (first page AND hasMore false), so no enumeration request is needed. Anything
+ * else enumerates the public search first. The result is cached per author for
+ * the session; a null is never cached, so a transient failure can recover.
+ */
+function _authorLifetimeLikes(name, ctx, pageRows, complete) {
+  if (_authorStats[name]) return Promise.resolve(_authorStats[name]);
+  if (_authorStatsPending[name]) return _authorStatsPending[name];
+  var p = (complete
+      ? Promise.resolve({ rows: pageRows || [], complete: true })
+      : _enumerateAuthorComments(name, ctx))
+    .then(function (enumRes) {
+      if (!enumRes || !enumRes.complete || !enumRes.rows.length) return null;
+      if (enumRes.rows.length > _AUTHOR_MAX_COMMENTS) return null;
+      return _fetchThreadVotes(enumRes.rows, ctx).then(function () {
+        var sum = 0;
+        var unknown = 0;
+        for (var i = 0; i < enumRes.rows.length; i++) {
+          var v = _knownVotes(enumRes.rows[i].id);
+          if (v === undefined) unknown += 1;
+          else sum += v;
+        }
+        // A handful of legacy comments (verified live: 2 of 98) predate the
+        // current wpDiscuz data and are not rendered anywhere, so they carry no
+        // visible votes. Tolerate only that small tail as 0 — a large or total
+        // unknown slice is the old "confident wrong number" all over.
+        if (unknown === enumRes.rows.length) return null;
+        if (unknown > 2 || unknown > enumRes.rows.length * 0.1) return null;
+        var stats = { totalLikes: sum };
+        _authorStats[name] = stats;
+        return stats;
+      });
+    });
+  _authorStatsPending[name] = p;
+  p.then(function () { delete _authorStatsPending[name]; },
+         function () { delete _authorStatsPending[name]; });
+  return p;
+}
+
 // comment id -> attached image URLs, learned from the same chapter markup that
 // carries the vote counts.
 var _commentImages = {};
@@ -341,7 +548,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.10.1",
+  version: "1.11.0",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -1409,7 +1616,7 @@ registerExtension({
     // theirs. Returns null when the plugin is not installed, so the app keeps
     // working either way.
     var exact = await this._authorCommentsExact(name, pageNum, perPage, ctx);
-    if (exact) return await this._buildAuthorComments(name, exact.rows, exact.total, exact.hasMore, ctx);
+    if (exact) return await this._buildAuthorComments(name, exact.rows, exact.total, exact.hasMore, ctx, pageNum === 1);
 
     // FALLBACK (plugin not installed). Same wrong count as before — kept so the
     // feature degrades rather than disappears.
@@ -1452,7 +1659,7 @@ registerExtension({
       return an === normalizedTarget;
     });
 
-    return await this._buildAuthorComments(name, filtered, total, hasMore, ctx);
+    return await this._buildAuthorComments(name, filtered, total, hasMore, ctx, pageNum === 1);
   },
 
   /**
@@ -1497,7 +1704,7 @@ registerExtension({
    * Shared enrichment: raw WP comment rows -> the shape the host expects
    * (chapter labels, quoted replies, images, known vote counts).
    */
-  _buildAuthorComments: async function (name, filtered, total, hasMore, ctx) {
+  _buildAuthorComments: async function (name, filtered, total, hasMore, ctx, isFirstPage) {
     var self = this;
     var cleanText = function (html) {
       if (!html) return "";
@@ -1506,6 +1713,30 @@ registerExtension({
         .replace(/\s+/g, " ")
         .trim();
     };
+
+    // The endpoint (when installed) hands us per-comment counts for free; bank
+    // them so the lifetime crawl below does not re-ask for those threads.
+    for (var s = 0; s < filtered.length; s++) {
+      var sc = filtered[s];
+      if (sc && typeof sc.likes === "number" && isFinite(sc.likes)) {
+        _voteCounts[String(sc.id)] = sc.likes;
+      }
+    }
+
+    // The endpoint is per-page and the legacy search total is not an author
+    // total, so neither can answer "this reader's lifetime likes". Compute that
+    // from public data here (see _authorLifetimeLikes) BEFORE building the
+    // cards, so the cards can also read the counts it banks.
+    var stats = null;
+    try {
+      stats = await _authorLifetimeLikes(
+        name, ctx, filtered, isFirstPage === true && hasMore !== true);
+    } catch (e) { stats = null; }
+    // Even when the lifetime total is out of reach, the visible cards should
+    // still show their own counts rather than blank.
+    if (!stats) {
+      try { await _fetchThreadVotes(filtered, ctx); } catch (e2) { /* non-fatal */ }
+    }
 
     // Chapter title + permalink, for EVERY post referenced on this page, in a
     // single request. This replaces both the inlined `_embed=up` copies and
@@ -1586,21 +1817,22 @@ registerExtension({
     // still got it wrong for every comment past the 10-chapter cap, which
     // silently rendered as a hardcoded 0.
     //
-    // Two things now supply counts, and neither guesses:
-    //   1. The site's own endpoint (docs/tn-author-comments-endpoint.php)
-    //      returns `likes` per comment when that plugin is installed.
-    //   2. `getCommentVotes` pulls one chapter's whole comment set on demand
-    //      (117 KB of comment markup, no chapter text) and banks it in
-    //      `_voteCounts`, so each chapter is fetched at most once per session.
+    // Counts now come from three places, and the header no longer sums just the
+    // visible page:
+    //   1. `_authorLifetimeLikes` enumerates the author's comments and reads
+    //      each thread's count from wpDiscuz's public action, giving the exact
+    //      lifetime total (and banking per-card counts on the way).
+    //   2. The site's optional endpoint may hand us `likes` per row.
+    //   3. `getCommentVotes` / the reader path bank counts in `_voteCounts`.
     // A card with no count in `_voteCounts` reports NO `likes` key, and the host
     // draws no number rather than a wrong one.
     return {
       authorName: name,
       totalComments: total > 0 ? total : comments.length,
-      // null = "not every count on this page is known". A partial sum reported
-      // as the author's total is a smaller wrong number rather than no number,
-      // which is the same class of lie the per-card 0 was. The host renders "—".
-      totalLikes: allCounted ? totalLikes : null,
+      // Exact author lifetime total when it was computable; otherwise fall back
+      // to the visible-page sum, and null when even that page is not fully
+      // counted (null = "unknown", which the host renders as "—").
+      totalLikes: stats ? stats.totalLikes : (allCounted ? totalLikes : null),
       comments: comments,
       hasMore: hasMore === true
     };

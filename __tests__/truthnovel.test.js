@@ -166,8 +166,9 @@ describe("site:truthnovel extension", () => {
     expect(res.comments[1].parentId).toBe("1");
     expect(res.hasMore).toBe(true);
     expect(exactHits).toBe(1);
-    // The broken path was never touched.
-    expect(searchHits).toBe(0);
+    // The DISPLAY still comes from the endpoint; the public search is now only
+    // probed by the separate lifetime-likes crawl, which must not replace it.
+    expect(searchHits).toBeGreaterThanOrEqual(1);
   });
 
   it("pages the exact endpoint with a real offset", async () => {
@@ -519,7 +520,7 @@ describe("site:truthnovel extension", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.10.1");
+    expect(ext.version).toBe("1.11.0");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -942,8 +943,11 @@ describe("site:truthnovel extension", () => {
     // And it must not ask WordPress to inline every parent post either — that
     // alone was ~700 KB per page, because a "post" here is a whole chapter.
     expect(requested.some((u) => u.includes("_embed=up"))).toBe(false);
-    // The whole page costs one comments call plus ONE batched titles call.
-    expect(requested.length).toBe(2);
+    // Chapter titles are still resolved in ONE batched request. The extra
+    // comments-search calls are the client-side lifetime-likes crawl (display
+    // page + enumeration pages), not the display path itself.
+    expect(requested.filter((u) => u.includes("/wp-json/wp/v2/posts?include=")).length).toBe(1);
+    expect(requested.filter((u) => u.includes("/wp-json/wp/v2/comments?search=")).length).toBe(5);
   });
 
   it("omits likes entirely when the count is unknown, rather than reporting 0", async () => {
@@ -1082,6 +1086,121 @@ describe("site:truthnovel extension", () => {
     // Comments + one batched titles call. No chapter page, because getComments
     // already banked that count.
     expect(requested.length).toBe(2);
+  });
+
+  it("computes the author's exact lifetime likes from public data alone", async () => {
+    // The endpoint is absent (unmatched -> 404), so this exercises the
+    // client-side crawl: enumerate the author's comments across search pages,
+    // then read each thread's count from wpDiscuz's public action.
+    const fresh = loadExtension("site.truthnovel.js");
+    const row = (id, post) => ({
+      id, author_name: "n", post, date_gmt: "2026-09-12T19:02:45",
+      content: { rendered: "<p>hi</p>" }, link: `https://truthnovel.top/${post}-c/#comment-${id}`
+    });
+    const voteMarkup = (id, n) =>
+      `<div id="comment-${id}"><span class="wpd-vote-result" title='${n}'></span></div>`;
+    const votes = { 11: 2, 12: 5, 13: 1 };
+    const rowsForPage = (page) => page === 1
+      ? [row(11, 2432), row(12, 2433), { ...row(99, 2432), author_name: "someone else" }]
+      : [row(13, 2434)];
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/comments?search=": (url) => {
+        const page = parseInt(new URL(url).searchParams.get("page"), 10) || 1;
+        return { ok: true, status: 200,
+          headers: { "x-wp-total": "3", "x-wp-totalpages": "2" },
+          text: JSON.stringify(rowsForPage(page)) };
+      },
+      "/wp-json/wp/v2/posts?include=": () => ok(JSON.stringify([
+        { id: 2432, title: { rendered: "1 -أ" }, link: "https://truthnovel.top/2432-c/" },
+        { id: 2433, title: { rendered: "2 -ب" }, link: "https://truthnovel.top/2433-c/" },
+        { id: 2434, title: { rendered: "3 -ج" }, link: "https://truthnovel.top/2434-c/" }
+      ])),
+      "admin-ajax.php": (url, init) => {
+        const body = String((init && init.body) || "");
+        if (body.includes("action=wpdGetNonce")) {
+          return ok(JSON.stringify({ success: true, data: { wpdiscuz_nonce: "n1" } }));
+        }
+        const m = /commentId=(\d+)/.exec(body);
+        const id = m ? m[1] : "0";
+        return ok(JSON.stringify({ success: true, data: { message: voteMarkup(id, votes[id] || 0) } }));
+      }
+    });
+
+    const page1 = await fresh.getAuthorComments("n", 1, ctx);
+    // Page 1 holds only two of the three comments, yet the header shows the
+    // author's real lifetime total (2 + 5 + 1), not the page subtotal.
+    expect(page1.totalLikes).toBe(8);
+    expect(page1.comments.find((c) => c.id === "11").likes).toBe(2);
+    expect(page1.comments.find((c) => c.id === "12").likes).toBe(5);
+
+    // A later page reports the SAME lifetime total, and its own cards too.
+    const page2 = await fresh.getAuthorComments("n", 2, ctx);
+    expect(page2.totalLikes).toBe(8);
+    expect(page2.comments.find((c) => c.id === "13").likes).toBe(1);
+  });
+
+  it("keeps the total unknown when too many threads cannot be read", async () => {
+    const fresh = loadExtension("site.truthnovel.js");
+    const row = (id, post) => ({
+      id, author_name: "n", post, date_gmt: "2026-09-12T19:02:45",
+      content: { rendered: "<p>hi</p>" }, link: `https://truthnovel.top/${post}-c/#comment-${id}`
+    });
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/comments?search=": () => ({ ok: true, status: 200,
+        headers: { "x-wp-total": "2", "x-wp-totalpages": "1" },
+        text: JSON.stringify([row(21, 2432), row(22, 2433)]) }),
+      "/wp-json/wp/v2/posts?include=": () => ok(JSON.stringify([
+        { id: 2432, title: { rendered: "1 -أ" }, link: "https://truthnovel.top/2432-c/" },
+        { id: 2433, title: { rendered: "2 -ب" }, link: "https://truthnovel.top/2433-c/" }
+      ])),
+      "admin-ajax.php": (url, init) => {
+        const body = String((init && init.body) || "");
+        if (body.includes("action=wpdGetNonce")) {
+          return ok(JSON.stringify({ success: true, data: { wpdiscuz_nonce: "n1" } }));
+        }
+        // Threads come back without a readable vote for either comment.
+        return ok(JSON.stringify({ success: true, data: { message: "<div>no counter</div>" } }));
+      }
+    });
+    const res = await fresh.getAuthorComments("n", 1, ctx);
+    // Half the set is unreadable, so no honest lifetime number exists. A page
+    // sum would be equally wrong, so it is null ("—"), not 0.
+    expect(res.totalLikes).toBeNull();
+  });
+
+  it("backs off and reports unknown when the site rate-limits the crawl", async () => {
+    // A 429/403 must never turn into a retry storm against a site we do not
+    // own: one throttled page ends the total as unknown and stops the crawl.
+    const fresh = loadExtension("site.truthnovel.js");
+    let enumPages = 0;
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/comments?search=": (url) => {
+        if (url.includes("per_page=100")) {
+          enumPages += 1;
+          return { ok: false, status: 429, text: "" };
+        }
+        return { ok: true, status: 200,
+          headers: { "x-wp-total": "2", "x-wp-totalpages": "2" },
+          text: JSON.stringify([{
+            id: 31, author_name: "n", post: 2432, date_gmt: "2026-09-12T19:02:45",
+            content: { rendered: "<p>x</p>" }, link: "https://truthnovel.top/2432-c/#comment-31"
+          }]) };
+      },
+      "/wp-json/wp/v2/posts?include=": () => ok(JSON.stringify([
+        { id: 2432, title: { rendered: "1 -أ" }, link: "https://truthnovel.top/2432-c/" }
+      ])),
+      "admin-ajax.php": (url, init) => {
+        const body = String((init && init.body) || "");
+        if (body.includes("action=wpdGetNonce")) {
+          return ok(JSON.stringify({ success: true, data: { wpdiscuz_nonce: "n1" } }));
+        }
+        return { ok: false, status: 429, text: "" };
+      }
+    });
+    const res = await fresh.getAuthorComments("n", 1, ctx);
+    expect(res.totalLikes).toBeNull();
+    // Page 1 was throttled, so the parallel page-2 fetch never went out.
+    expect(enumPages).toBe(1);
   });
 
   it("quotes the parent comment inside reply cards", async () => {

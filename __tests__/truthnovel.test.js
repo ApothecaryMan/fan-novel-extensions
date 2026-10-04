@@ -521,7 +521,7 @@ describe("site:truthnovel extension", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.11.1");
+    expect(ext.version).toBe("1.11.2");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -611,6 +611,29 @@ describe("site:truthnovel extension", () => {
     const latest = await fresh.fetchLatestChapters("https://truthnovel.top/?w4pl=257", 2467, ctx);
     expect(latest.map((c) => c.number)).toEqual([2468, 2469]);
     expect(pages).toBe(1);
+  });
+
+  it("fetchLatestChapters returns the newest known chapter instead of [] when up to date", async () => {
+    // Host contract: an empty result means "method failed, do a full crawl".
+    // Returning [] here turned every no-news check into a full 25-page crawl —
+    // slower than the first import. A non-empty proof lets the host return
+    // after this single page with nothing to insert.
+    const fresh = loadExtension("site.truthnovel.js");
+    let pages = 0;
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/posts?per_page=100": (url) => {
+        pages += 1;
+        return ok(JSON.stringify([
+          { id: 3, link: "https://truthnovel.top/2469-x/", title: { rendered: "2469 - إستهزاء" }, date_gmt: "2026-09-29T18:53:37" },
+          { id: 2, link: "https://truthnovel.top/2468-x/", title: { rendered: "2468 - عنوان" }, date_gmt: "2026-09-28T18:53:37" }
+        ]));
+      }
+    });
+    const latest = await fresh.fetchLatestChapters("https://truthnovel.top/?w4pl=257", 2469, ctx);
+    expect(pages).toBe(1);
+    expect(latest).toHaveLength(1);
+    expect(latest[0].number).toBe(2469);
+    expect(latest[0].url).toBe("https://truthnovel.top/2469-x/");
   });
 
   it("parses chapter content and properly cleans entity codes like &#8230; and ;8230#", async () => {

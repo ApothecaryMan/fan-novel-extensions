@@ -553,7 +553,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.11.1",
+  version: "1.11.2",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -999,11 +999,18 @@ registerExtension({
    * entire 19.6 MB crawl. New posts are the highest ids, so one descending page
    * normally covers the gap; further pages are only fetched if the caller is
    * more than 100 chapters behind.
+   *
+   * Up-to-date proof: when nothing is new, the newest KNOWN chapter is returned
+   * instead of []. The host treats an empty result as "method failed, do a full
+   * crawl", so returning [] here turned every no-news check into a full
+   * 25-page crawl — slower than the first import. A non-empty candidate tells
+   * the host the fast path succeeded and there is simply nothing to insert.
    */
   fetchLatestChapters: async function (novelUrl, knownCount, ctx) {
     var self = this;
     var found = [];
     var page = 1;
+    var boundary = null;
     while (page < 400) {
       // Page 1 is fetched ALONE, not as part of a parallel wave. The common case
       // is "a few new chapters at most", so a wave of speculative pages would
@@ -1022,12 +1029,19 @@ registerExtension({
         // notice, a promo) at the top of the descending list used to end the
         // scan immediately and hide the newest chapters, which are exactly the
         // ones the reader is missing.
-        if (ch.number > 0 && ch.number <= knownCount) { reachedKnown = true; allNew = false; break; }
+        if (ch.number > 0 && ch.number <= knownCount) {
+          reachedKnown = true;
+          allNew = false;
+          if (!boundary) boundary = ch;
+          break;
+        }
+        if (ch.number > 0 && !boundary) boundary = ch;
         found.push(ch);
       }
       if (reachedKnown || first.length < 100 || !allNew) break;
       page++;
     }
+    if (!found.length && boundary) return [boundary];
     found.sort(function (a, b) { return (a.number || 0) - (b.number || 0); });
     return found;
   },

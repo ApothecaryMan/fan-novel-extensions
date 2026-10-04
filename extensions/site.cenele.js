@@ -61,7 +61,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.12.1',
+  version: '1.12.2',
   apiVersion: 2,
   baseUrl: 'https://cenele.com',
 
@@ -635,6 +635,10 @@ registerExtension({
       .replace(/<div[^>]*class="[^"]*nhv-reader-promo[^"]*"[^>]*>[\s\S]*?<\/a>\s*<\/div>/gi, '')
       .replace(/<figure[^>]*data-nosnippet[^>]*>[\s\S]*?<\/figure>/gi, '')
       .replace(/<figure[^>]*class="[^"]*r[0-9a-f]{12,}[^"]*"[^>]*>[\s\S]*?<\/figure>/gi, '')
+      // The anti-scrape decoys render as inert/data-nosnippet blocks and are
+      // repeated every few paragraphs. Their warning text is obfuscated, so
+      // drop the whole block instead of relying on a phrase test alone.
+      .replace(/<[a-z][a-z0-9:-]*[^>]*\b(?:inert|data-nosnippet)\b[^>]*>[\s\S]*?<\/(?:div|figure|p|span|em|aside)>/gi, ' ')
       .replace(/<blockquote[^>]*>[\s\S]*?<\/blockquote>/gi, '')
       .replace(/<aside[^>]*>[\s\S]*?<\/aside>/gi, '')
       .replace(/<div[^>]*class="[^"]*nhv-reading-chapter-head[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '')
@@ -647,7 +651,7 @@ registerExtension({
       var text = this._decodeEntities(this._stripTags(bm[1]));
       if (!text) continue;
       if (this._isAdTrap(text)) continue;
-      if (/Google Play|تطبيق فضاء الروايات الرسمي|حمّل التطبيق لقراءة أسرع|حمله من هنا من غوغل بلاي|بدون انترنات|لمتابعة المانهوا/.test(text)) continue;
+      if (/Google Play|App Store|تطبيق فضاء الروايات الرسمي|النسخة النهائية لتطبيق فضاء الروايات|حمّل التطبيق|حمل التطبيق|تحميل التطبيق|حمله من هنا|غوغل بلاي|جوجل بلاي|بدون انترنات|لمتابعة المانهوا|إعلانات مزعجة/.test(text)) continue;
       if (/^(نهاية الفصل|تم الفصل|الفصل التالي|انتهى الفصل|النهاية|تمت)/.test(text)) break;
       if (/^[-ـ—_]{3,}$/.test(text)) continue;
       if (/^بسم الله/.test(text)) continue;

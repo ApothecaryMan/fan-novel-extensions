@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1791138618295,
+  "generatedAt": 1791139888398,
   "extensions": [
     {
       "id": "site:cenele",
       "name": "فضاء الروايات",
       "lang": "ar",
-      "version": "1.12.1",
+      "version": "1.12.2",
       "apiVersion": 2,
-      "size": 56085,
-      "sha256": "cfdce56004b608b57ae9dfe0073bc91c29d9b344279145ef14bbc3a64224399f",
+      "size": 56581,
+      "sha256": "085bbfe0894b3536df2b8dfc5b8dc7244ff9b678a677fa058a0f0fc5c4421d41",
       "url": "site.cenele.js",
       "baseUrl": "https://cenele.com",
       "icon": "icons/cenele.png"
@@ -97,5 +97,5 @@
       "icon": "icons/wuxiaworld.png"
     }
   ],
-  "signature": "xRwdFrkjc0knVAWHhwxefOfDMEuZ-w-7w-KeMuiK6v56kDRbalsnG7TziHr-Mx1k0ais7X2r8AcnZTgylR1aDw"
+  "signature": "MkWbZdGjmf5-kxbtZovDSvLhNL4hJtkH0a466Z0aXOgEEBxCNx4bGrrkncuTuJkZQEpzqo6VjgYkpKx9snjVAg"
 }

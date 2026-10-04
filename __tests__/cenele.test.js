@@ -59,7 +59,7 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:cenele'));
   it('has correct name', () => expect(ext.name).toBe('فضاء الروايات'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.12.1'));
+  it('has correct version', () => expect(ext.version).toBe('1.12.2'));
   it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://cenele.com'));
 
@@ -353,10 +353,12 @@ describe('parseChapterContent (real story-layer chapter)', () => {
     expect(content.length).toBeGreaterThan(5000);
   });
 
-  it('strips the obfuscated anti-scrape warning and the app promo', async () => {
+  it('strips the repeated anti-scrape traps and the Google Play app promo', async () => {
     const content = await ext.parseChapterContent(URL, pageCtx());
     expect(content).not.toContain('يسرق');
     expect(content).not.toContain('Google Play');
+    expect(content).not.toContain('غوغل بلاي');
+    expect(content).not.toContain('App Store');
     expect(content).not.toContain('تطبيق فضاء الروايات الرسمي');
     expect(content).not.toContain('عدد الكلمات');
     expect(content).not.toContain('المترجم');

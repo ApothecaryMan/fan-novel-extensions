@@ -61,7 +61,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.12.0',
+  version: '1.12.1',
   apiVersion: 2,
   baseUrl: 'https://cenele.com',
 
@@ -586,20 +586,50 @@ registerExtension({
     return chapters || this._finalizeChapters(this._parseChapterRows(res.text));
   },
 
+  // The prose wrapper has been renamed across site versions:
+  // <text-canvas> → <novel-chapter> → <story-layer>. Prefer any of them.
+  // A bare reading-content div nests other divs, so it must be cut with a
+  // balanced scan — a non-greedy `</div>` stops at the chapter header and
+  // truncates the chapter to its metadata.
+  _extractChapterBody: function (html) {
+    var wrap = html.match(/<(?:text-canvas|novel-chapter|story-layer)[^>]*>([\s\S]*?)<\/(?:text-canvas|novel-chapter|story-layer)>/i);
+    if (wrap) return wrap[1];
+    var open = html.match(/<div[^>]*\bid="chapter-[^"]*"[^>]*>/i) ||
+               html.match(/<div[^>]*\bclass="[^"]*\breading-content\b(?![-\w])[^"]*"[^>]*>/i);
+    if (!open) return null;
+    var start = open.index + open[0].length;
+    var tagRe = /<\/?div\b[^>]*>/gi;
+    tagRe.lastIndex = start;
+    var depth = 1;
+    var m;
+    while ((m = tagRe.exec(html)) !== null) {
+      depth += (m[0].charAt(1) === '/' ? -1 : 1);
+      if (depth === 0) return html.slice(start, m.index);
+    }
+    return html.slice(start);
+  },
+
+  // The anti-scrape warning is rendered with tatweel, combining marks and
+  // Arabic presentation forms between the letters, so a plain substring test
+  // misses it. Fold to plain Arabic before matching the trap phrase.
+  _isAdTrap: function (text) {
+    if (!text) return false;
+    var t = String(text);
+    if (typeof t.normalize === 'function') t = t.normalize('NFKC');
+    t = t.replace(/[\u0640\u064B-\u0652\u0670]/g, '');
+    return /هذا التطبيق يسرق|يسرق من موقع/.test(t);
+  },
+
   // -------------------------------------------------- chapter body
   parseChapterContent: async function (chapterUrl, ctx) {
     var res = await ctx.xFetch(this._absUrl(chapterUrl));
     if (!res.ok) throw new Error('فشل جلب نص الفصل: ' + res.status);
     var html = res.text;
 
-    var panelMatch = html.match(/<text-canvas[^>]*>([\s\S]*?)<\/text-canvas>/i) ||
-                     html.match(/<novel-chapter[^>]*>([\s\S]*?)<\/novel-chapter>/i) ||
-                     html.match(/<div[^>]*\bid="chapter-[^"]*"[^>]*class="[^"]*reading-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i) ||
-                     html.match(/<div[^>]*class="[^"]*reading-content[^"]*\bcurrent\b[^"]*"[^>]*>([\s\S]*?)<\/div>/i) ||
-                     html.match(/<div[^>]*class="[^"]*reading-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
-    if (!panelMatch) throw new Error('تعذر العثور على نص الفصل');
+    var body = this._extractChapterBody(html);
+    if (!body) throw new Error('تعذر العثور على نص الفصل');
 
-    var body = panelMatch[1]
+    body = body
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
       .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
       .replace(/<div[^>]*class="[^"]*nhv-reader-promo[^"]*"[^>]*>[\s\S]*?<\/a>\s*<\/div>/gi, '')
@@ -616,7 +646,7 @@ registerExtension({
     while ((bm = blockRegex.exec(body)) !== null) {
       var text = this._decodeEntities(this._stripTags(bm[1]));
       if (!text) continue;
-      if (/هذا التطبيق يسرق|يسرق من موقع/.test(text)) continue;
+      if (this._isAdTrap(text)) continue;
       if (/Google Play|تطبيق فضاء الروايات الرسمي|حمّل التطبيق لقراءة أسرع|حمله من هنا من غوغل بلاي|بدون انترنات|لمتابعة المانهوا/.test(text)) continue;
       if (/^(نهاية الفصل|تم الفصل|الفصل التالي|انتهى الفصل|النهاية|تمت)/.test(text)) break;
       if (/^[-ـ—_]{3,}$/.test(text)) continue;

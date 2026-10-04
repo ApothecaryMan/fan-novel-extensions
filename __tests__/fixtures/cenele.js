@@ -18,6 +18,12 @@ export const REAL_SEARCH_PAGE = readFileSync(resolve(base, 'search.html'), 'utf8
 export const REAL_GENRE_PAGE = readFileSync(resolve(base, 'genre.html'), 'utf8');
 export const REAL_CHAPTER_PAGE = readFileSync(resolve(base, 'chapter-1.html'), 'utf8');
 
+// Same novel, same chapter, captured 2026-10-04: the site renamed the prose
+// wrapper from <novel-chapter> to <story-layer> and moved the anti-scrape
+// warning into obfuscated <div data-nosnippet> traps. The parser must still
+// return the full body (a non-greedy `</div>` cut returns only the header).
+export const REAL_STORY_LAYER_CHAPTER_PAGE = readFileSync(resolve(base, 'chapter-story-layer.html'), 'utf8');
+
 // The real admin-ajax chapter-list responses (ascending by chapter number, 100/page).
 // IMPORTANT (observed on the live site): the server IGNORES the `order` param, so
 // `page-1` holds chapters 1..100 and the NEWEST live on the LAST page.

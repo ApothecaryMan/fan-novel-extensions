@@ -19,6 +19,7 @@ import {
   REAL_SEARCH_PAGE,
   REAL_GENRE_PAGE,
   REAL_CHAPTER_PAGE,
+  REAL_STORY_LAYER_CHAPTER_PAGE,
   REAL_AJAX,
   REAL_NOVEL_URL,
   REAL_POST_ID,
@@ -58,7 +59,7 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:cenele'));
   it('has correct name', () => expect(ext.name).toBe('فضاء الروايات'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.12.0'));
+  it('has correct version', () => expect(ext.version).toBe('1.12.1'));
   it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://cenele.com'));
 
@@ -336,6 +337,63 @@ describe('parseChapterContent (real chapter page)', () => {
   it('throws when the chapter body is missing', async () => {
     const ctx = mockCtx({ '/empty': ok('<html><body>no panel</body></html>') });
     await expect(ext.parseChapterContent('/empty', ctx)).rejects.toThrow('تعذر العثور على نص الفصل');
+  });
+});
+
+// The site renamed the prose wrapper <novel-chapter> → <story-layer> (2026-10)
+// and moved its anti-scrape warning into obfuscated data-nosnippet divs. A
+// non-greedy reading-content cut returned only the 24-char chapter header.
+describe('parseChapterContent (real story-layer chapter)', () => {
+  const pageCtx = () => mockCtx({ 'cenele.com/cont': ok(REAL_STORY_LAYER_CHAPTER_PAGE) });
+  const URL = 'https://cenele.com/cont/the-creatures-that-we-are-riwya/x/1/';
+
+  it('reads the full prose under <story-layer>, not just the header', async () => {
+    const content = await ext.parseChapterContent(URL, pageCtx());
+    expect(content).toContain('مرت اثنتا عشرة سنة منذ أن انتقل غاو يانغ إلى هذا العالم');
+    expect(content.length).toBeGreaterThan(5000);
+  });
+
+  it('strips the obfuscated anti-scrape warning and the app promo', async () => {
+    const content = await ext.parseChapterContent(URL, pageCtx());
+    expect(content).not.toContain('يسرق');
+    expect(content).not.toContain('Google Play');
+    expect(content).not.toContain('تطبيق فضاء الروايات الرسمي');
+    expect(content).not.toContain('عدد الكلمات');
+    expect(content).not.toContain('المترجم');
+  });
+});
+
+describe('_extractChapterBody', () => {
+  it('prefers the story-layer wrapper', () => {
+    expect(ext._extractChapterBody('<story-layer class="x">HELLO</story-layer>')).toBe('HELLO');
+  });
+  it('still reads the legacy novel-chapter / text-canvas wrappers', () => {
+    expect(ext._extractChapterBody('<novel-chapter>OLD</novel-chapter>')).toBe('OLD');
+    expect(ext._extractChapterBody('<text-canvas>CANVAS</text-canvas>')).toBe('CANVAS');
+  });
+  it('cuts a bare reading-content div with balanced tags (no header truncation)', () => {
+    const html = '<div id="chapter-9" class="reading-content current"><div class="head">H</div><p>BODY</p></div>';
+    const body = ext._extractChapterBody(html);
+    expect(body).toContain('BODY');
+    expect(body).toContain('H');
+  });
+  it('returns null when no chapter container exists', () => {
+    expect(ext._extractChapterBody('<html><body>nothing</body></html>')).toBeNull();
+  });
+});
+
+describe('_isAdTrap', () => {
+  it('detects the tatweel/presentation-form obfuscated warning', () => {
+    // Plain phrase disguised with tatweel between every letter + a lam
+    // presentation form — exactly how the site renders it.
+    const obfuscated = 'هذا التطبيق يسرق من موقع'
+      .replace(/ل/g, '\uFEDF')
+      .split('')
+      .join('\u0640');
+    expect(ext._isAdTrap(obfuscated)).toBe(true);
+  });
+  it('leaves normal prose alone', () => {
+    expect(ext._isAdTrap('مرت اثنتا عشرة سنة منذ أن انتقل غاو يانغ.')).toBe(false);
   });
 });
 

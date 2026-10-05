@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1791199033287,
+  "generatedAt": 1791201435617,
   "extensions": [
     {
       "id": "site:cenele",
@@ -30,10 +30,10 @@
       "id": "site:kolnovel",
       "name": "كول نوفيل",
       "lang": "ar",
-      "version": "1.9.0",
+      "version": "1.9.1",
       "apiVersion": 2,
-      "size": 57093,
-      "sha256": "a25003f7a43ed74b803d9dcbc7b58622c8b0c300854144707b6cc3f001b1a956",
+      "size": 59529,
+      "sha256": "a0866636e47256078791d5586b528736429b5d58bbcfefd4c121c0f1c3a8de69",
       "url": "site.kolnovel.js",
       "baseUrl": "https://kolnovel.com",
       "icon": "icons/kolnovel.png"
@@ -97,5 +97,5 @@
       "icon": "icons/wuxiaworld.png"
     }
   ],
-  "signature": "WkvvnW-mzdXt7JO-tPvBTP5awImPJ0bsSnL_Za3ezxSOsUmUjWOg4CA09aAyi4FVFHuyufr5P7TPQbW7wcLzBg"
+  "signature": "9RwOR_gju8IpkUdTrYmmdWAhgwg5IzcyhldQGzB3_yCS0GRiMn0a0bBvnhG2xh9DSm9b1D_md1Mt3wgUas3jCA"
 }

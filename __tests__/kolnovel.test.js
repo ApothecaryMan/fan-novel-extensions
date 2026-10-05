@@ -27,7 +27,7 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:kolnovel'));
   it('has correct name', () => expect(ext.name).toBe('كول نوفيل'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.9.0'));
+  it('has correct version', () => expect(ext.version).toBe('1.9.1'));
   it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://kolnovel.com'));
 
@@ -532,6 +532,40 @@ describe('parseChapterContent', () => {
     const ctx = mockCtx({ '/content-fallback': ok(html) });
     const content = await ext.parseChapterContent('/content-fallback', ctx);
     expect(content).toContain('Entry content paragraph');
+  });
+
+  it('keeps chapter title text after the heading prefix (سلالة الدم ch.1)', async () => {
+    const html = `<!DOCTYPE html><html><body><div id="kol_content">
+      <p>الفصل 1: كيف بدأ كل شيء</p>
+      <p>النص الفعلي يبدأ هنا</p>
+    </div></body></html>`;
+    const ctx = mockCtx({ '/content-heading-title': ok(html) });
+    const content = await ext.parseChapterContent('/content-heading-title', ctx);
+    expect(content).toContain('كيف بدأ كل شيء');
+    expect(content).toContain('النص الفعلي');
+  });
+
+  it('ignores hidden decoy paragraphs (anti-scraper shuffle)', async () => {
+    const html = `<!DOCTYPE html><html><head><style>
+      .a22222222222222222222222222222222,.a33333333333333333333333333333333{height:0.1px;overflow:hidden;opacity:0;text-indent:-99999px;bottom:-999px;}
+    </style></head><body><div id="kol_content">
+      <p class='a11111111111111111111111111111111'><strong>في ساحة كبيرة هتافات الجمهور</strong><p class="a22222222222222222222222222222222">نعم هذا أنا غوستاف من المستقبل البعيد</p>
+      <p class='a44444444444444444444444444444444'><strong>تراجعت مجموعة من خمسة أفراد</strong><p class="a33333333333333333333333333333333">استقبلت والدة غوستاف طفل آخر</p>
+      <p class='a55555555555555555555555555555555'><strong>كان طوله ستة أقدام</strong><p class="a66666666666666666666666666666666">ما الخطأ في هذا النجم</p>
+      <p class='a77777777777777777777777777777777'><strong>سار ببطء نحو المجموعة</strong><p class="a88888888888888888888888888888888">اتسعت عينا غوستاف</p>
+      <p class='a99999999999999999999999999999999'><strong>رحلتك تنتهي هنا</strong><p class="a00000000000000000000000000000000">كان دائما يتراجع</p>
+      <p class='aabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'><strong>مد يده اليمنى</strong><p class="aacccccccccccccccccccccccccccccccc">كان غوستاف مكروه</p>
+    </div></body></html>`;
+    const ctx = mockCtx({ '/content-decoy': ok(html) });
+    const content = await ext.parseChapterContent('/content-decoy', ctx);
+    const paras = content.split('\n\n');
+    expect(paras).toContain('في ساحة كبيرة هتافات الجمهور');
+    expect(paras).toContain('تراجعت مجموعة من خمسة أفراد');
+    expect(content).not.toContain('نعم هذا أنا غوستاف من المستقبل البعيد');
+    expect(content).not.toContain('استقبلت والدة غوستاف طفل آخر');
+    paras.forEach((p) => {
+      expect(p).not.toContain('في ساحة كبيرة هتافات الجمهور نعم هذا أنا');
+    });
   });
 });
 

@@ -5,7 +5,7 @@ registerExtension({
   id: 'site:kolnovel',
   name: 'كول نوفيل',
   lang: 'ar',
-  version: '1.9.0',
+  version: '1.9.1',
   apiVersion: 2,
   baseUrl: 'https://kolnovel.com',
 
@@ -537,40 +537,103 @@ registerExtension({
     // Remove h2/h3/h4 heading tags
     rawContent = rawContent.replace(/<h[1-4][^>]*>[\s\S]*?<\/h[1-4]>/gi, '\n');
 
-    // Extract paragraphs
-    var paragraphs = [];
-    var pRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi;
-    var pMatch;
-    while ((pMatch = pRegex.exec(rawContent)) !== null) {
-      var text = this._decodeEntities(this._stripTags(pMatch[1]));
-      if (!text) continue;
-      // Skip footer markers
-      if (/^(نهاية الفصل|تم الفصل|الفصل التالي|انتهى الفصل)/.test(text)) break;
-      // Remove URL leaks (sponsor/source links) and collapse any doubled whitespace left
-      // behind (fixes #10).
+    var self = this;
+    // Hidden decoy classes: the site hides scraper-trap paragraphs with CSS like
+    // `.<hash>{height:0.1px;opacity:0;text-indent:-99999px}` (verified live: 9 hashes
+    // per chapter, all matching the double-quoted <p class="HASH"> stream). Hashes are
+    // random per chapter, so collect them from the page instead of hardcoding.
+    var hiddenClasses = {};
+    var styleRe = /<style[^>]*>([\s\S]*?)<\/style>/gi;
+    var stM;
+    while ((stM = styleRe.exec(html)) !== null) {
+      var css = stM[1];
+      if (css.indexOf('0.1px') === -1 && css.indexOf('-99999') === -1) continue;
+      var clsRe = /\.([a-f0-9]{16,64})/gi;
+      var cM;
+      while ((cM = clsRe.exec(css)) !== null) hiddenClasses[cM[1]] = true;
+    }
+    var isHiddenTag = function (tag) {
+      var cm = tag.match(/class=(?:"([^"]*)"|'([^']*)')/i);
+      var clsStr = cm ? (cm[1] !== undefined ? cm[1] : cm[2]) : '';
+      var parts = clsStr.split(/\s+/);
+      for (var hi = 0; hi < parts.length; hi++) {
+        if (parts[hi] && hiddenClasses[parts[hi]]) return true;
+      }
+      return false;
+    };
+    var cleanPara = function (text) {
+      if (!text) return null;
+      if (/^(نهاية الفصل|تم الفصل|الفصل التالي|انتهى الفصل)/.test(text)) return 'BREAK';
       text = text.replace(/https?:\/\/\S+/g, ' ').replace(/[ \t\u00A0]{2,}/g, ' ');
-      // Remove leading chapter-heading prefixes: "الفصل N[:T]", "[ الفصل N]", "الفصل الـ N",
-      // and Arabic-number words like "الفصل التاسع: ..."
-      text = text.replace(/^\[?\s*(الفصل|فصل)\s+(الـ)?\s*\d+(?:\s*[:|].*)?\s*\]?\s*/i, '')
+      text = text.replace(/^\[?\s*(الفصل|فصل)\s+(الـ)?\s*\d+\s*(?:[:|\-–—]\s*)?\]?\s*/i, '')
                  .replace(/^\s*\[\s*(الفصل|فصل)\s+(الـ)?\s*\d+\s*\]\s*/i, '')
-                 // Composite Arabic tens (11-19) must be stripped BEFORE the standalone
-                 // word-numbers below, or "الثالث" in "الثالث عشر" gets consumed alone.
                  .replace(/^\[?\s*(الفصل|فصل)\s+(?:الحادي|الثاني)?\s*عشر(?:اء)?\s*[:|\-–—.]?\s*/i, '')
                  .replace(/^\[?\s*(الفصل|فصل)\s+(?:الأول|الثاني|الثالث|الرابع|الخامس)\s+عشر\s*[:|\-–—.]?\s*/i, '')
-                 // Teens 16-19 (السادس عشر .. العاشر عشر)
                  .replace(/^\[?\s*(الفصل|فصل)\s+(?:السادس|السابع|الثامن|التاسع|العاشر)\s+عشر\s*[:|\-–—.]?\s*/i, '')
-                 // "الفصل الـ 45", "الفصل رقم 45", "الفصل عدد 45"
                  .replace(/^\[?\s*(الفصل|فصل)\s+(?:الـ|ال|رقم|عدد)\s*\d+\s*[:|\-–—.]?\s*/i, '')
                  .replace(/^\[?\s*(الفصل|فصل)\s+(الأول|الثاني|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر)\s*[:|.]?\s*/i, '')
                  .replace(/^\[?\s*(الفصل|فصل)\s+(?:[أ-ي]{3,}\s+(?:و\s+)?)+[أ-ي]{3,}\s*:\s*/i, '')
                  .replace(/^\[?\s*(الفصل|فصل)\s+\S+:\s*/i, '');
-      // Remove numeric-only headers: "N - Title", "N.md", standalone "N"
       text = text.replace(/^\d{1,6}\s*[-–:]\s*/, '')
                  .replace(/^\d{1,6}\.?md\.?\s*/i, '')
                  .replace(/^\d{1,6}$/, '');
       text = text.trim();
+      if (!text) return null;
+      return text;
+    };
+
+    // Extract paragraphs
+    var paragraphs = [];
+    // Anti-scraper layout: each real paragraph is <p class='HASH'>REAL<p class="HASH">DECOY</p>
+    // where DECOY is a shuffled duplicate hidden via CSS (height:0.1px;opacity:0). A generic
+    // <p>(REAL+DECOY)</p> match merges two distant sentences and scrambles the order
+    // (e.g. سلالة الدم ch.1 started mid-story with merged sentences). The visible stream
+    // is picked via the page's own hidden-class CSS, so a future quote-style flip still
+    // resolves correctly; quote style is only the fallback when no hidden CSS is found.
+    var collectStream = function (quote) {
+      var q = quote === "'" ? "'" : '"';
+      var re = new RegExp("<p\\s+class=" + q + "([a-f0-9]{16,64})" + q + "[^>]*>([\\s\\S]*?)(?=<p\\s+class=|</p>)", 'gi');
+      var items = [];
+      var m;
+      while ((m = re.exec(rawContent)) !== null) {
+        items.push({ cls: m[1], tag: m[0].slice(0, 200), raw: m[2] });
+      }
+      return items;
+    };
+    var singleItems = collectStream("'");
+    var doubleItems = collectStream('"');
+    var pickStream = function (items) {
+      if (items.length < 5) return null;
+      var hiddenCount = 0;
+      for (var si = 0; si < items.length; si++) {
+        if (hiddenClasses[items[si].cls]) hiddenCount++;
+      }
+      if (hiddenCount > items.length / 2) return null;
+      var out = [];
+      for (var oi = 0; oi < items.length; oi++) {
+        if (hiddenClasses[items[oi].cls]) continue;
+        var t = self._decodeEntities(self._stripTags(items[oi].raw));
+        if (!t) continue;
+        var c = cleanPara(t);
+        if (c === 'BREAK') break;
+        if (!c) continue;
+        out.push(c);
+      }
+      return out.length > 0 ? out : null;
+    };
+    var visibleParas = pickStream(singleItems) || pickStream(doubleItems);
+    if (visibleParas) return visibleParas.join('\n\n');
+
+    var pRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi;
+    var pMatch;
+    while ((pMatch = pRegex.exec(rawContent)) !== null) {
+      if (isHiddenTag(pMatch[0])) continue;
+      var text = this._decodeEntities(this._stripTags(pMatch[1]));
       if (!text) continue;
-      paragraphs.push(text);
+      var cleaned = cleanPara(text);
+      if (cleaned === 'BREAK') break;
+      if (!cleaned) continue;
+      paragraphs.push(cleaned);
     }
 
     // Fallback: if no <p> elements were found, fall back to the blockquotes we saved before

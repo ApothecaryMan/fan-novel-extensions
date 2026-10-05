@@ -27,7 +27,7 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:kolnovel'));
   it('has correct name', () => expect(ext.name).toBe('كول نوفيل'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.9.1'));
+  it('has correct version', () => expect(ext.version).toBe('1.9.2'));
   it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://kolnovel.com'));
 
@@ -284,6 +284,16 @@ describe('parseNovelInfo', () => {
     const ctx = mockCtx({ '/novel-title': ok(NOVEL_PAGE) });
     const info = await ext.parseNovelInfo('/novel-title', ctx);
     expect(info.title).toBe('ملح البرية');
+  });
+
+  it('cleans slug-style titles (سلالة الدم entities + -kol)', async () => {
+    const html = NOVEL_PAGE.replace(
+      '<h1 class="entry-title">ملح البرية</h1>',
+      '<h1 class="entry-title">نظام&amp;سلالة&amp;الدم-kol</h1>'
+    );
+    const ctx = mockCtx({ '/novel-slug-title': ok(html) });
+    const info = await ext.parseNovelInfo('/novel-slug-title', ctx);
+    expect(info.title).toBe('نظام سلالة الدم');
   });
 
   it('extracts author from الكاتب section', async () => {

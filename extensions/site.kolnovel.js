@@ -5,7 +5,7 @@ registerExtension({
   id: 'site:kolnovel',
   name: 'كول نوفيل',
   lang: 'ar',
-  version: '1.9.1',
+  version: '1.9.2',
   apiVersion: 2,
   baseUrl: 'https://kolnovel.com',
 
@@ -149,6 +149,18 @@ registerExtension({
     return m.trim();
   },
 
+  // The site stores some titles slug-style ("نظام&سلالة&الدم-kol"): HTML entities
+  // plus "&" word separators and a "-kol" dedupe suffix. Browsers show the raw symbols,
+  // so clean them here instead of leaking "&amp;" / "&" / "-kol" into the library.
+  _cleanNovelTitle: function (raw, fallback) {
+    var t = this._decodeEntities(this._stripTags(raw || ''));
+    t = t.replace(/ملوك الروايات/g, ' ');
+    t = t.replace(/-kol\s*$/i, '');
+    t = t.replace(/&/g, ' ');
+    t = t.replace(/\s+/g, ' ').trim();
+    return t || fallback || '';
+  },
+
   // Build the final "Chapter <number> <name>" title; auto-generate missing numbers.
   _finalizeChapters: function (list) {
     var sorted = list.slice().sort(function (a, b) { return (a.number || 0) - (b.number || 0); });
@@ -270,8 +282,8 @@ registerExtension({
     var html = await this._fetchNovelHtml(fullUrl, ctx);
 
     var titleMatch = html.match(/<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>([^<]+)<\/h1>/i) ||
-                     html.match(/<title>([^–\-&#<]+)/i);
-    var title = titleMatch ? this._stripTags(titleMatch[1]).replace(/ملوك الروايات/g, '').trim() : 'رواية';
+                     html.match(/<title>([^<]+)/i);
+    var title = titleMatch ? this._cleanNovelTitle(titleMatch[1], 'رواية') : 'رواية';
 
     // Cover: look in .sertothumb img, then og:image, then wp-post-image
     var coverMatch = html.match(/<div[^>]*class="[^"]*sertothumb[^"]*"[^>]*>[\s\S]*?<img[^>]+src="([^">]+)"/i) ||
@@ -701,7 +713,7 @@ registerExtension({
           results.push({
             source: this.id,
             url: utaoUrl,
-            title: this._decodeEntities(this._stripTags(utaoTitle[1]).trim()),
+            title: this._cleanNovelTitle(utaoTitle[1], ''),
             coverUrl: utaoCover ? this._cover(utaoCover[1]) : undefined,
             author: 'غير معروف',
             category: 'روايات مترجمة',
@@ -745,7 +757,7 @@ registerExtension({
       results.push({
         source: this.id,
         url: hotUrl,
-        title: hotTitle ? this._decodeEntities(this._stripTags(hotTitle[1]).trim()) : '',
+        title: hotTitle ? this._cleanNovelTitle(hotTitle[1], '') : '',
         coverUrl: hotCover ? this._cover(hotCover[1]) : undefined,
         author: 'غير معروف',
         category: hotCat,
@@ -774,7 +786,7 @@ registerExtension({
       results.push({
         source: this.id,
         url: bsxUrl,
-        title: bsxTitle ? this._decodeEntities(this._stripTags(bsxTitle[1]).trim()) : '',
+        title: bsxTitle ? this._cleanNovelTitle(bsxTitle[1], '') : '',
         coverUrl: bsxCover ? this._cover(bsxCover[1]) : undefined,
         author: 'غير معروف',
         category: 'روايات مترجمة',
@@ -860,7 +872,7 @@ registerExtension({
       results.push({
         source: this.id,
         url: mdUrl,
-        title: mdTitle ? this._decodeEntities(mdTitle[1].trim()) : '',
+        title: mdTitle ? this._cleanNovelTitle(mdTitle[1], '') : '',
         coverUrl: mdCover ? this._cover(mdCover[1]) : undefined,
         author: 'غير معروف',
         category: mdCategory,

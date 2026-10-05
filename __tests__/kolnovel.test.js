@@ -27,7 +27,7 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:kolnovel'));
   it('has correct name', () => expect(ext.name).toBe('كول نوفيل'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.7.2'));
+  it('has correct version', () => expect(ext.version).toBe('1.9.0'));
   it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://kolnovel.com'));
 
@@ -1237,9 +1237,86 @@ describe('getComments', () => {
     expect('authorAvatar' in res.comments[1]).toBe(false);
   });
 
-  it('postComment and voteComment require login', async () => {
+  it('postComment and voteComment require a saved login', async () => {
     const ctx = mockCtx();
-    await expect(ext.postComment('https://kolnovel.com/ch-test-291266/', { body: 'x' }, ctx)).rejects.toThrow('تسجيل الدخول');
-    await expect(ext.voteComment('https://kolnovel.com/ch-test-291266/', { commentId: 'c1', vote: 1 }, ctx)).rejects.toThrow('تسجيل الدخول');
+    await expect(ext.postComment('https://kolnovel.com/ch-test-291266/', { body: 'x' }, ctx)).rejects.toThrow('kolnovel-auth-required');
+    await expect(ext.voteComment('https://kolnovel.com/ch-test-291266/', { commentId: 'c1', vote: 1 }, ctx)).rejects.toThrow('kolnovel-auth-required');
+  });
+
+  it('postComment creates a comment record with the saved user id', async () => {
+    const fresh = loadExtension('site.kolnovel.js');
+    const CH = 'https://kolnovel.com/ch-post/';
+    let sentBody = null;
+    const ctx = mockCtx({
+      'ch-post/': ok(`<kol-comments slug="s" entity-title="t" entity-id="900" series-id="7"></kol-comments>`),
+      'entities/ensure': ok(JSON.stringify({ id: 'pb-entity', commentsCount: 0 })),
+      'collections/comments/records': (url, init) => {
+        sentBody = JSON.parse(init.body);
+        return ok(JSON.stringify({ id: 'new-c1' }));
+      },
+    });
+    const res = await fresh.postComment(CH, { body: 'hello', siteUserId: 'u1', author: 'u', email: 'e' }, ctx);
+    expect(res).toEqual({ ok: true, id: 'new-c1' });
+    expect(sentBody.author).toBe('u1');
+    expect(sentBody.entity).toBe('pb-entity');
+    expect(sentBody.text).toContain('hello');
+  });
+
+  it('postComment surfaces an expired session with a stable code', async () => {
+    const fresh = loadExtension('site.kolnovel.js');
+    const CH = 'https://kolnovel.com/ch-exp/';
+    const ctx = mockCtx({
+      'ch-exp/': ok(`<kol-comments slug="s" entity-title="t" entity-id="900" series-id="7"></kol-comments>`),
+      'entities/ensure': ok(JSON.stringify({ id: 'pb', commentsCount: 0 })),
+      'collections/comments/records': { ok: false, status: 401, text: '' },
+    });
+    await expect(fresh.postComment(CH, { body: 'x', siteUserId: 'u1' }, ctx)).rejects.toThrow('kolnovel-auth-expired');
+  });
+
+  it('voteComment toggles an existing vote off', async () => {
+    const fresh = loadExtension('site.kolnovel.js');
+    const calls = [];
+    const ctx = mockCtx({
+      'comment_votes/records?perPage=1&filter=': ok(JSON.stringify({ items: [{ id: 'v1', value: 1 }] })),
+      'comment_votes/records/v1': (url, init) => {
+        calls.push(init.method);
+        return init.method === 'DELETE' ? ok('{}') : { ok: false, status: 500, text: '' };
+      },
+      'comment_net/records': ok(JSON.stringify({ items: [{ comment: 'c1', net: 4 }] })),
+    });
+    const res = await fresh.voteComment('https://kolnovel.com/ch/', { commentId: 'c1', vote: 1, siteUserId: 'u1' }, ctx);
+    expect(calls).toEqual(['DELETE']);
+    expect(res).toEqual({ ok: true, likes: 4, liked: false });
+  });
+
+  it('voteComment creates a vote when none exists', async () => {
+    const fresh = loadExtension('site.kolnovel.js');
+    let created = null;
+    const ctx = mockCtx({
+      'comment_votes/records?perPage=1&filter=': ok(JSON.stringify({ items: [] })),
+      'comment_votes/records': (url, init) => {
+        if (init.method === 'POST') {
+          created = JSON.parse(init.body);
+          return ok(JSON.stringify({ id: 'v9' }));
+        }
+        return { ok: false, status: 404, text: '' };
+      },
+      'comment_net/records': ok(JSON.stringify({ items: [{ comment: 'c1', net: 1 }] })),
+    });
+    const res = await fresh.voteComment('https://kolnovel.com/ch/', { commentId: 'c1', vote: 1, siteUserId: 'u1' }, ctx);
+    expect(created).toMatchObject({ comment: 'c1', user: 'u1', value: 1 });
+    expect(res).toEqual({ ok: true, likes: 1, liked: true });
+  });
+
+  it('declares a valid login descriptor for host auto-discovery', () => {
+    expect(ext.auth).toMatchObject({
+      kind: 'pocketbase',
+      apiBaseUrl: 'https://cmtapi.kolnovel.com',
+    });
+    expect(ext.auth.sso).toMatchObject({
+      clientId: 'kol-comments-widget',
+      exchangePath: '/api/auth/kolnovel/exchange',
+    });
+    expect(typeof ext.auth.registerUrl).toBe('string');
   });
 });

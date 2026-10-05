@@ -5,9 +5,24 @@ registerExtension({
   id: 'site:kolnovel',
   name: 'كول نوفيل',
   lang: 'ar',
-  version: '1.7.2',
+  version: '1.9.0',
   apiVersion: 2,
   baseUrl: 'https://kolnovel.com',
+
+  // Login declaration (single place): the host auto-discovers this after
+  // install and wires the login sheet, session storage, and auth header
+  // injection with no app-side changes. Paths omitted = PocketBase defaults.
+  auth: {
+    kind: 'pocketbase',
+    apiBaseUrl: 'https://cmtapi.kolnovel.com',
+    sso: {
+      authorizeUrl: 'https://kolnovel.com/wp-admin/admin-post.php?action=kol_comments_sso_authorize',
+      clientId: 'kol-comments-widget',
+      redirectUri: 'https://kolnovel.com/account/',
+      exchangePath: '/api/auth/kolnovel/exchange',
+    },
+    registerUrl: 'https://kolnovel.com/registerr/',
+  },
 
   // Custom comment backend (PocketBase). Chapter pages embed:
   // <kol-comments slug entity-title entity-url entity-id="WP_POST_ID"
@@ -803,8 +818,9 @@ registerExtension({
   //    (Lexical JSON in `text`, plain fallback in `normalizedContent`)
   // 4. GET /api/collections/comment_net/records?filter=entity="UUID"
   //    ({comment, likes, dislikes, net}) -> mapped to likes.
-  // Write/vote require a KolNovel login (PocketBase auth), so postComment
-  // and voteComment throw a clear message.
+  // Write/vote are authenticated via the bundle's `auth` declaration above:
+  // the host injects the saved PocketBase token, this supplies the user id,
+  // and `kolnovel-auth-*` errors tell the app to (re)open login.
   // ---------------------------------------------------------------
   // Per-chapter comment state: the <kol-comments> tag and the entity UUID.
   // Both are tiny (a few hundred bytes) and never change for a chapter, but
@@ -1117,11 +1133,117 @@ registerExtension({
     return isNaN(t) ? Date.parse(s) : t;
   },
 
-  postComment: async function () {
-    throw new Error('التعليق يتطلب تسجيل الدخول في كول نوفيل');
+  // Authenticated write path. The PocketBase token never enters the sandbox:
+  // the host injects `Authorization` on every cmtapi request (WebViewRuntime),
+  // so this only supplies the user id the server requires as the author/voter.
+  // Missing id = the app never logged in; 401/403 = the saved session died.
+  // Both surface as stable `kolnovel-auth-*` prefixes the app matches on.
+  _cmtSiteUserId: function (input) {
+    var id = input && (input.siteUserId || input.authUserId);
+    id = id ? String(id).trim() : '';
+    if (!id) throw new Error('kolnovel-auth-required: سجّل الدخول في كول نوفيل للتعليق');
+    return id;
   },
 
-  voteComment: async function () {
-    throw new Error('التصويت يتطلب تسجيل الدخول في كول نوفيل');
+  _cmtAuthError: function (res, label) {
+    if (res && (res.status === 401 || res.status === 403)) {
+      throw new Error('kolnovel-auth-expired: انتهت جلسة كول نوفيل، سجّل الدخول مجددا');
+    }
+    throw new Error(label + ': ' + (res ? res.status : 'network'));
+  },
+
+  // Plain text -> TipTap doc JSON (what the site widget stores in `text`).
+  _cmtStoredDoc: function (body) {
+    var parts = String(body || '').split(/\n{2,}/).map(function (p) { return p.trim(); }).filter(Boolean);
+    if (!parts.length) parts = [String(body || '').trim()];
+    return JSON.stringify({
+      type: 'doc',
+      content: parts.map(function (paragraph) {
+        return { type: 'paragraph', content: [{ type: 'text', text: paragraph }] };
+      })
+    });
+  },
+
+  _cmtEscFilter: function (value) {
+    return String(value == null ? '' : value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  },
+
+  _cmtAuthedJson: async function (url, ctx, label, init) {
+    var res;
+    try {
+      res = await ctx.xFetch(url, init);
+    } catch (e) {
+      throw new Error(label + ': ' + (e && e.message ? e.message : String(e)));
+    }
+    if (res.status === 401 || res.status === 403) this._cmtAuthError(res, label);
+    if (!res.ok) throw new Error(label + ': ' + res.status);
+    try {
+      return JSON.parse(res.text);
+    } catch (e) {
+      throw new Error('رد غير متوقع من نظام التعليقات');
+    }
+  },
+
+  postComment: async function (chapterUrl, input, ctx) {
+    var userId = this._cmtSiteUserId(input);
+    var body = input && input.body ? String(input.body).trim() : '';
+    if (!body) throw new Error('نص التعليق فارغ');
+    var fullUrl = this._absUrl(chapterUrl);
+    var tag = await this._cmtTagFor(fullUrl, ctx);
+    if (!tag) throw new Error('تعذر تحديد صفحة التعليقات');
+    var ensure = await this._cmtEnsure(fullUrl, tag, ctx);
+    var pbId = ensure && ensure.id;
+    if (!pbId) throw new Error('فشل تجهيز التعليقات');
+    var payload = { author: userId, entity: pbId, isDeleted: false, text: this._cmtStoredDoc(body) };
+    var parentRaw = input && input.parentId ? String(input.parentId).trim() : '';
+    if (parentRaw) payload.parentId = parentRaw;
+    var created = await this._cmtAuthedJson(this._cmtApi + '/api/collections/comments/records', ctx, 'فشل نشر التعليق', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return { ok: true, id: created && created.id ? String(created.id) : undefined };
+  },
+
+  voteComment: async function (chapterUrl, input, ctx) {
+    var userId = this._cmtSiteUserId(input);
+    var cid = input && input.commentId ? String(input.commentId).trim() : '';
+    if (!cid) throw new Error('تعذر تحديد التعليق');
+    var vote = input && input.vote === -1 ? -1 : 1;
+    var filter = encodeURIComponent('comment="' + this._cmtEscFilter(cid) + '" && user="' + this._cmtEscFilter(userId) + '"');
+    var found = await this._cmtAuthedJson(
+      this._cmtApi + '/api/collections/comment_votes/records?perPage=1&filter=' + filter,
+      ctx, 'فشل التصويت');
+    var existing = found && found.items && found.items[0];
+    var liked = vote === 1;
+    if (existing && existing.id) {
+      if (existing.value === vote) {
+        await this._cmtAuthedJson(this._cmtApi + '/api/collections/comment_votes/records/' + encodeURIComponent(existing.id), ctx, 'فشل التصويت', { method: 'DELETE' });
+        liked = false;
+      } else {
+        await this._cmtAuthedJson(this._cmtApi + '/api/collections/comment_votes/records/' + encodeURIComponent(existing.id), ctx, 'فشل التصويت', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value: vote })
+        });
+      }
+    } else {
+      await this._cmtAuthedJson(this._cmtApi + '/api/collections/comment_votes/records', ctx, 'فشل التصويت', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comment: cid, user: userId, value: vote })
+      });
+    }
+    var netFilter = encodeURIComponent('comment="' + this._cmtEscFilter(cid) + '"');
+    var net = await this._cmtAuthedJson(
+      this._cmtApi + '/api/collections/comment_net/records?perPage=1&filter=' + netFilter,
+      ctx, 'فشل التصويت');
+    var row = net && net.items && net.items[0];
+    var likes = 0;
+    if (row) {
+      var v = parseInt(typeof row.net !== 'undefined' ? row.net : row.likes, 10);
+      if (!isNaN(v) && v >= 0) likes = v;
+    }
+    return { ok: true, likes: likes, liked: liked };
   }
 });

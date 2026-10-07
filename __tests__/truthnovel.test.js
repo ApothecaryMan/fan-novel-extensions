@@ -521,7 +521,7 @@ describe("site:truthnovel extension", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.11.3");
+    expect(ext.version).toBe("1.11.4");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -653,6 +653,60 @@ describe("site:truthnovel extension", () => {
     expect(latest).toHaveLength(1);
     expect(latest[0].number).toBe(2469);
     expect(latest[0].url).toBe("https://truthnovel.top/2469-x/");
+  });
+
+  it("fetchLatestChapters returns every new chapter when the stored count runs ahead of chapter numbers", async () => {
+    // THE reported bug: the list carries X.5 fillers + unnumbered notices, so
+    // the stored ROW count (102) runs ahead of the highest chapter NUMBER (95).
+    // Comparing `number <= knownCount` then mistook the genuinely new chapters
+    // 96 and 97 for known ones, stopped on the very first row, and returned
+    // only the single newest chapter. The gap is now measured in rows
+    // (X-WP-Total minus knownCount): 104 - 102 = 2 new rows, one request.
+    const fresh = loadExtension("site.truthnovel.js");
+    let pages = 0;
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/posts?per_page=100": (url) => {
+        pages += 1;
+        if (!url.includes("order=desc")) throw new Error("must page newest-first");
+        return {
+          ...ok(JSON.stringify([
+            { id: 104, link: "https://truthnovel.top/97-x/", title: { rendered: "97 - جديد" }, date_gmt: "2026-09-30T18:53:37" },
+            { id: 103, link: "https://truthnovel.top/96-x/", title: { rendered: "96 - جديد" }, date_gmt: "2026-09-29T18:53:37" },
+            { id: 102, link: "https://truthnovel.top/95-x/", title: { rendered: "95 - قديم" }, date_gmt: "2026-09-28T18:53:37" }
+          ])),
+          headers: { "x-wp-total": "104", "x-wp-totalpages": "2" }
+        };
+      }
+    });
+    const latest = await fresh.fetchLatestChapters("https://truthnovel.top/?w4pl=257", 102, ctx);
+    expect(latest.map((c) => c.number)).toEqual([96, 97]);
+    expect(pages).toBe(1);
+  });
+
+  it("fetchLatestChapters pages further only when more than 100 chapters behind", async () => {
+    // 250 total rows, 100 known -> the 150 newest rows across exactly 2 pages.
+    const fresh = loadExtension("site.truthnovel.js");
+    let pages = 0;
+    const ctx = mockCtx({
+      "/wp-json/wp/v2/posts?per_page=100": (url) => {
+        pages += 1;
+        const pg = Number((url.match(/[?&]page=(\d+)/) || [])[1] || 1);
+        const top = 250 - (pg - 1) * 100;
+        const rows = [];
+        for (let n = top; n > top - 100 && n >= 1; n--) {
+          rows.push({ id: n, link: `https://truthnovel.top/${n}-x/`, title: { rendered: `${n} - فصل` }, date_gmt: "2026-09-01T00:00:00" });
+        }
+        return {
+          ...ok(JSON.stringify(rows)),
+          headers: { "x-wp-total": "250", "x-wp-totalpages": "3" }
+        };
+      }
+    });
+    const latest = await fresh.fetchLatestChapters("https://truthnovel.top/?w4pl=257", 100, ctx);
+    expect(pages).toBe(2);
+    expect(latest).toHaveLength(150);
+    expect(latest[0].number).toBe(101);
+    expect(latest[149].number).toBe(250);
   });
 
   it("parses chapter content and properly cleans entity codes like &#8230; and ;8230#", async () => {

@@ -553,7 +553,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.11.3",
+  version: "1.11.4",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -1016,7 +1016,16 @@ registerExtension({
    * normally covers the gap; further pages are only fetched if the caller is
    * more than 100 chapters behind.
    *
-   * Up-to-date proof: when nothing is new, the newest KNOWN chapter is returned
+   * The gap is measured in ROWS (X-WP-Total minus knownCount), never by
+   * comparing chapter NUMBERS against the count. The list carries X.5 filler
+   * chapters plus unnumbered notices, so the stored row count runs ahead of the
+   * highest chapter number — and `number <= knownCount` then mistook genuinely
+   * new chapters for known ones, stopped the scan on the very first row, and
+   * returned only that single newest chapter while the rest never arrived.
+   * Rows are append-only, so the newest `total - knownCount` rows are exactly
+   * the unknown ones and the host filters them by URL.
+   *
+   * Up-to-date proof: when nothing is new, the newest chapter is returned
    * instead of []. The host treats an empty result as "method failed, do a full
    * crawl", so returning [] here turned every no-news check into a full
    * 25-page crawl — slower than the first import. A non-empty candidate tells
@@ -1024,19 +1033,56 @@ registerExtension({
    */
   fetchLatestChapters: async function (novelUrl, knownCount, ctx) {
     var self = this;
+    var known = parseInt(knownCount, 10);
+    if (isNaN(known) || known < 0) known = 0;
+    var fields = "id,title,link,date_gmt";
+    var head = await self._restPostsPage(1, fields, "desc", ctx);
+    if (!head || !head.list) throw new Error("فشل جلب أحدث الفصول");
+    if (!head.list.length) return [];
+    // No total header (old mocks / stripped headers): fall back to the legacy
+    // number scan over this page, which needs no header at all.
+    if (!head.total) return self._latestByNumber(head.list, known, ctx);
+    var freshCount = head.total - known;
+    if (freshCount <= 0) return [self._postToChapter(head.list[0], 0)];
+    var pagesNeeded = Math.min(Math.ceil(freshCount / 100), 400);
+    var rows = head.list.slice();
+    if (pagesNeeded > 1) {
+      var rest = [];
+      for (var p = 2; p <= pagesNeeded; p++) rest.push(p);
+      var pages = await self._poolAll(rest, 8, function (pg) {
+        return self._restPosts(pg, fields, "desc", ctx);
+      });
+      for (var i = 0; i < pages.length; i++) {
+        // A failed page must NOT silently truncate the list: the host is
+        // append-only, so missing rows would never come back.
+        if (!pages[i]) throw new Error("فشل جلب أحدث الفصول");
+        rows = rows.concat(pages[i]);
+      }
+    }
+    var fresh = rows.slice(0, Math.min(freshCount, rows.length));
+    var out = [];
+    for (var j = 0; j < fresh.length; j++) out.push(self._postToChapter(fresh[j], j));
+    out.sort(function (a, b) { return (a.number || 0) - (b.number || 0); });
+    return out;
+  },
+
+  /**
+   * Legacy newest-first scan, kept for responses without an X-WP-Total header.
+   * Compares chapter NUMBERS against knownCount one page at a time; correct
+   * only while the row count still tracks the highest number (no fillers).
+   */
+  _latestByNumber: async function (firstPage, knownCount, ctx) {
+    var self = this;
     var found = [];
     var page = 1;
     var boundary = null;
+    var first = firstPage;
     while (page < 400) {
-      // Page 1 is fetched ALONE, not as part of a parallel wave. The common case
-      // is "a few new chapters at most", so a wave of speculative pages would
-      // spend 4 requests to find out that 1 was enough. Further pages are only
-      // requested once a whole page has come back unknown, which only happens
-      // when the reader is genuinely far behind.
-      var first = await self._restPosts(page, "id,title,link,date_gmt", "desc", ctx);
-      if (!first) throw new Error("فشل جلب أحدث الفصول");
+      if (page > 1) {
+        first = await self._restPosts(page, "id,title,link,date_gmt", "desc", ctx);
+        if (!first) throw new Error("فشل جلب أحدث الفصول");
+      }
       var reachedKnown = false;
-      var allNew = true;
       for (var i = 0; i < first.length; i++) {
         var ch = self._postToChapter(first[i], found.length);
         // Only a post with a REAL number can be compared against what we already
@@ -1047,14 +1093,13 @@ registerExtension({
         // ones the reader is missing.
         if (ch.number > 0 && ch.number <= knownCount) {
           reachedKnown = true;
-          allNew = false;
           if (!boundary) boundary = ch;
           break;
         }
         if (ch.number > 0 && !boundary) boundary = ch;
         found.push(ch);
       }
-      if (reachedKnown || first.length < 100 || !allNew) break;
+      if (reachedKnown || first.length < 100) break;
       page++;
     }
     if (!found.length && boundary) return [boundary];

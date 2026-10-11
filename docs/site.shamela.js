@@ -1,6 +1,6 @@
 // @id       site:shamela
 // @name     المكتبة الشاملة
-// @version  1.1.1
+// @version  1.1.2
 // @lang     ar
 // @apiVersion 1
 // @baseUrl  https://shamela.ws
@@ -56,7 +56,7 @@ registerExtension({
   id: 'site:shamela',
   name: 'المكتبة الشاملة',
   lang: 'ar',
-  version: '1.1.1',
+  version: '1.1.2',
   apiVersion: 1,
   baseUrl: 'https://shamela.ws',
 
@@ -283,6 +283,18 @@ registerExtension({
       wordCount: wordCount,
       readingMinutes: readingMinutes
     };
+  },
+
+  fetchLatestChapters: async function (novelUrl, knownCount, ctx) {
+    var bookId = this._bookIdFromUrl(novelUrl);
+    if (!bookId) throw new Error('رابط الكتاب غير صالح');
+    var known = parseInt(knownCount, 10);
+    if (isNaN(known) || known < 0) known = 0;
+    var html = await this._fetchText(this._absUrl('/book/' + bookId), ctx);
+    var inline = this._collectTocLinks(html).length;
+    var collapsed = this._collectCollapsedNodes(html).length;
+    if (collapsed === 0 && inline <= known) return [];
+    return this.parseChapterList(novelUrl, ctx);
   },
 
   // ---------------------------------------------------------------

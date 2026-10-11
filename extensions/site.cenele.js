@@ -61,7 +61,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.12.2',
+  version: '1.12.3',
   apiVersion: 2,
   baseUrl: 'https://cenele.com',
 
@@ -382,7 +382,7 @@ registerExtension({
   // (parallel) crawls from a phone trigger 403s and degrade the list to the
   // inline ~8-row fallback. Sequential + jitter stays under that throttle and
   // is still fast (~10 pages ≈ a few seconds on mobile).
-  _loadChapters: async function (html, ctx, onlyLast, referer) {
+  _loadChapters: async function (html, ctx, onlyLast, referer, knownCount) {
     var props = this._nhvProps(html);
     if (!props) return null;
     var state = { nonce: props.chaptersNonce, nonceRefreshed: false, referer: referer || null };
@@ -393,6 +393,8 @@ registerExtension({
     var total = parseInt(first.total, 10) || 0;
     var perPage = parseInt(first.per_page, 10) || 100;
     var lastPage = total > 0 ? Math.ceil(total / perPage) : (first.has_more ? 2 : 1);
+    var known = parseInt(knownCount, 10);
+    if (onlyLast && !isNaN(known) && known >= 0 && total > 0 && total <= known) return [];
 
     var pageHtmls = [];
     if (onlyLast) {
@@ -582,8 +584,9 @@ registerExtension({
     var fullUrl = this._absUrl(novelUrl);
     var res = await _fetchCached(fullUrl, ctx);
     if (!res.ok) throw new Error('فشل جلب أحدث الفصول: ' + res.status);
-    var chapters = await this._loadChapters(res.text, ctx, true, fullUrl);
-    return chapters || this._finalizeChapters(this._parseChapterRows(res.text));
+    var chapters = await this._loadChapters(res.text, ctx, true, fullUrl, knownCount);
+    if (Array.isArray(chapters)) return chapters;
+    return this._finalizeChapters(this._parseChapterRows(res.text));
   },
 
   // The prose wrapper has been renamed across site versions:

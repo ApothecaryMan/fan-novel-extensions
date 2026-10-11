@@ -39,7 +39,7 @@ beforeAll(() => {
 describe("site:novelfull extension", () => {
   it("has valid metadata", () => {
     expect(ext.id).toBe("site:novelfull");
-    expect(ext.version).toBe("1.2.6");
+    expect(ext.version).toBe("1.2.7");
     expect(ext.apiVersion).toBe(1);
     expect(ext.baseUrl).toBe("https://novelfull.com");
   });
@@ -82,12 +82,11 @@ describe("site:novelfull extension", () => {
     expect(latest.map((c) => c.number)).toEqual([101, 102]);
   });
 
-  it("fetchLatestChapters falls back to [] when the last page fails", async () => {
+  it("fetchLatestChapters throws when the last page fails", async () => {
     const ctx = mockCtx({
       "?page=3": { ok: false, status: 500, text: "" },
       "cultivation-online": ok(NOVEL_HTML),
     });
-    const latest = await ext.fetchLatestChapters("https://novelfull.com/cultivation-online.html", 100, ctx);
-    expect(latest).toEqual([]);
+    await expect(ext.fetchLatestChapters("https://novelfull.com/cultivation-online.html", 100, ctx)).rejects.toThrow();
   });
 });

@@ -553,7 +553,7 @@ registerExtension({
   id: "site:truthnovel",
   name: "رواية سيد الحقيقة",
   lang: "ar",
-  version: "1.11.4",
+  version: "1.11.5",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
 
@@ -1025,11 +1025,9 @@ registerExtension({
    * Rows are append-only, so the newest `total - knownCount` rows are exactly
    * the unknown ones and the host filters them by URL.
    *
-   * Up-to-date proof: when nothing is new, the newest chapter is returned
-   * instead of []. The host treats an empty result as "method failed, do a full
-   * crawl", so returning [] here turned every no-news check into a full
-   * 25-page crawl — slower than the first import. A non-empty candidate tells
-   * the host the fast path succeeded and there is simply nothing to insert.
+   * Clean means []: the host treats an empty result as up-to-date and
+   * returns without a full crawl. Failures throw, so the host falls back
+   * to a full parseChapterList instead of hiding the error as clean.
    */
   fetchLatestChapters: async function (novelUrl, knownCount, ctx) {
     var self = this;
@@ -1043,7 +1041,7 @@ registerExtension({
     // number scan over this page, which needs no header at all.
     if (!head.total) return self._latestByNumber(head.list, known, ctx);
     var freshCount = head.total - known;
-    if (freshCount <= 0) return [self._postToChapter(head.list[0], 0)];
+    if (freshCount <= 0) return [];
     var pagesNeeded = Math.min(Math.ceil(freshCount / 100), 400);
     var rows = head.list.slice();
     if (pagesNeeded > 1) {
@@ -1102,7 +1100,7 @@ registerExtension({
       if (reachedKnown || first.length < 100) break;
       page++;
     }
-    if (!found.length && boundary) return [boundary];
+    if (!found.length) return [];
     found.sort(function (a, b) { return (a.number || 0) - (b.number || 0); });
     return found;
   },

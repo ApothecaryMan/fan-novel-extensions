@@ -73,7 +73,7 @@ describe("site:wuxiaworld extension", () => {
     expect(ext.id).toBe("site:wuxiaworld");
     expect(ext.name).toBe("WuxiaWorld");
     expect(ext.lang).toBe("en");
-    expect(ext.version).toBe("1.0.2");
+    expect(ext.version).toBe("1.0.3");
     expect(ext.apiVersion).toBe(1);
     expect(ext.baseUrl).toBe("https://lite.wuxiaworld.com");
   });
@@ -182,15 +182,14 @@ describe("site:wuxiaworld extension", () => {
     expect(latest.map((c) => c.number)).toEqual([6701, 6702]);
   });
 
-  it("fetchLatestChapters falls back to [] when the last page fails", async () => {
+  it("fetchLatestChapters throws when the last page fails", async () => {
     const ctx = mockCtx({
       "?toc=68": { ok: false, status: 500, text: "" },
       "martial-god-asura": ok(NOVEL_HTML),
     });
-    const latest = await ext.fetchLatestChapters(
+    await expect(ext.fetchLatestChapters(
       "https://lite.wuxiaworld.com/novel/martial-god-asura", 6700, ctx
-    );
-    expect(latest).toEqual([]);
+    )).rejects.toThrow();
   });
 
   it("exposes sort categories", async () => {

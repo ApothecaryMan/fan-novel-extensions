@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1791349306443,
+  "generatedAt": 1791741016957,
   "extensions": [
     {
       "id": "site:cenele",
       "name": "فضاء الروايات",
       "lang": "ar",
-      "version": "1.12.2",
+      "version": "1.12.3",
       "apiVersion": 2,
-      "size": 56581,
-      "sha256": "085bbfe0894b3536df2b8dfc5b8dc7244ff9b678a677fa058a0f0fc5c4421d41",
+      "size": 56776,
+      "sha256": "ffbaea2b365d44a3af166db288943fc13afce0ddc10d1e29c142258c12ea5010",
       "url": "site.cenele.js",
       "baseUrl": "https://cenele.com",
       "icon": "icons/cenele.png"
@@ -42,10 +42,10 @@
       "id": "site:novelfull",
       "name": "NovelFull",
       "lang": "en",
-      "version": "1.2.6",
+      "version": "1.2.7",
       "apiVersion": 1,
-      "size": 22249,
-      "sha256": "229dc1a5f44bb270b00992332e99b4cbcc42755d2a20550473e652d289a5381e",
+      "size": 22227,
+      "sha256": "ec499d9b9b9d4a6f2245b456525512b207f65a134cb24addbd07386e6f9392d3",
       "url": "site.novelfull.js",
       "baseUrl": "https://novelfull.com",
       "icon": "icons/novelfull.png"
@@ -54,10 +54,10 @@
       "id": "site:shamela",
       "name": "المكتبة الشاملة",
       "lang": "ar",
-      "version": "1.1.1",
+      "version": "1.1.2",
       "apiVersion": 1,
-      "size": 21211,
-      "sha256": "1b781f1f11ed3a19ae8228add1fd884ba1e8b8ddd3b77517f6ce1240bb3237eb",
+      "size": 21791,
+      "sha256": "43f42ef6e4b16100c39085d3421022036eb20accc5f8c318ef5f996b11920a36",
       "url": "site.shamela.js",
       "baseUrl": "https://shamela.ws"
     },
@@ -65,10 +65,10 @@
       "id": "site:truthnovel",
       "name": "رواية سيد الحقيقة",
       "lang": "ar",
-      "version": "1.11.4",
+      "version": "1.11.5",
       "apiVersion": 2,
-      "size": 86182,
-      "sha256": "4c51bdefcdc490e813f6014028a10cd64b0d94f2af85a805725b4e4c093f4c3e",
+      "size": 85954,
+      "sha256": "8f4ecc5ce6bfab970a5acdf808fe7740727359fdbaf47721bcbd2f8e61d40d8c",
       "url": "site.truthnovel.js",
       "baseUrl": "https://truthnovel.top"
     },
@@ -76,10 +76,10 @@
       "id": "site:wikisource",
       "name": "ويكي مصدر",
       "lang": "ar",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "apiVersion": 1,
-      "size": 23913,
-      "sha256": "9b1aee97fa18f70ebd63f7473daa45d5424311f836bae721e6d83461dc51f8e8",
+      "size": 24780,
+      "sha256": "fcb3f1d46e47113eea7b91e1715bcadbbace81ce1e2cae5125dde39dccf0b305",
       "url": "site.wikisource.js",
       "baseUrl": "https://ar.wikisource.org",
       "icon": "icons/wikisource.png"
@@ -88,14 +88,14 @@
       "id": "site:wuxiaworld",
       "name": "WuxiaWorld",
       "lang": "en",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "apiVersion": 1,
-      "size": 18081,
-      "sha256": "d9103d5c588d8284b11651f41c1fdc747ab044cb5786ec981a39aa2b223b43c5",
+      "size": 18059,
+      "sha256": "ac40d5d732fb717d33c0d2baca1aeca8c0303854984d931161fcf2aa5b563ee2",
       "url": "site.wuxiaworld.js",
       "baseUrl": "https://lite.wuxiaworld.com",
       "icon": "icons/wuxiaworld.png"
     }
   ],
-  "signature": "6DMdy26LSC6FXCttNhYJCj1wWEqZxfG9dGXFpnzLcH_4F3wSqfRLyr-7TJMWNbOl7S9OyniNilJQE9Fiu7MnCw"
+  "signature": "xtTdzYQHGG200NDe_uVOfgXdr5OJ89Hsf0KLczhuZ4jd9sqtuTSaIAUn2ZMTq9tbIGoF1vjp67tADSsm47peCg"
 }

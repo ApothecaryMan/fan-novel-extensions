@@ -1,6 +1,6 @@
 // @id       site:wikisource
 // @name     ويكي مصدر
-// @version  1.0.2
+// @version  1.0.3
 // @lang     ar
 // @apiVersion 1
 // @baseUrl  https://ar.wikisource.org
@@ -58,7 +58,7 @@ registerExtension({
   id: 'site:wikisource',
   name: 'ويكي مصدر',
   lang: 'ar',
-  version: '1.0.2',
+  version: '1.0.3',
   apiVersion: 1,
   baseUrl: 'https://ar.wikisource.org',
 
@@ -381,6 +381,26 @@ registerExtension({
       wordCount: words > 0 ? words : undefined,
       readingMinutes: words > 0 ? Math.max(1, Math.round(words / 140)) : undefined
     };
+  },
+
+  fetchLatestChapters: async function (novelUrl, knownCount, ctx) {
+    var base = String(novelUrl || '').split('#')[0];
+    var title = this._pageTitleFromUrl(this._absUrl(base));
+    var known = parseInt(knownCount, 10);
+    if (isNaN(known) || known < 0) known = 0;
+    if (!title) return this.parseChapterList(novelUrl, ctx);
+    var api = this.baseUrl + '/w/api.php?action=query&list=allpages&apprefix='
+      + encodeURIComponent(title + '/') + '&aplimit=500&format=json';
+    var data;
+    try {
+      data = await this._fetchJson(api, ctx);
+    } catch (e) {
+      throw new Error('فشل جلب أحدث الفصول');
+    }
+    var pages = (data && data.query && data.query.allpages) || [];
+    if (!pages.length) return this.parseChapterList(novelUrl, ctx);
+    if (pages.length <= known) return [];
+    return this.parseChapterList(novelUrl, ctx);
   },
 
   // ---------------------------------------------------------------

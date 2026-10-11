@@ -59,7 +59,7 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:cenele'));
   it('has correct name', () => expect(ext.name).toBe('فضاء الروايات'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.12.2'));
+  it('has correct version', () => expect(ext.version).toBe('1.12.3'));
   it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://cenele.com'));
 

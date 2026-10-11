@@ -521,7 +521,7 @@ describe("site:truthnovel extension", () => {
     expect(ext.id).toBe("site:truthnovel");
     expect(ext.name).toContain("سيد الحقيقة");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.11.4");
+    expect(ext.version).toBe("1.11.5");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
   });
@@ -632,27 +632,26 @@ describe("site:truthnovel extension", () => {
     expect(pages).toBe(1);
   });
 
-  it("fetchLatestChapters returns the newest known chapter instead of [] when up to date", async () => {
-    // Host contract: an empty result means "method failed, do a full crawl".
-    // Returning [] here turned every no-news check into a full 25-page crawl —
-    // slower than the first import. A non-empty proof lets the host return
-    // after this single page with nothing to insert.
+  it("fetchLatestChapters returns [] when up to date", async () => {
+    // Host contract: [] means clean (no full crawl). Failures throw, so the
+    // host falls back to a full crawl instead of hiding the error as clean.
     const fresh = loadExtension("site.truthnovel.js");
     let pages = 0;
     const ctx = mockCtx({
       "/wp-json/wp/v2/posts?per_page=100": (url) => {
         pages += 1;
-        return ok(JSON.stringify([
-          { id: 3, link: "https://truthnovel.top/2469-x/", title: { rendered: "2469 - إستهزاء" }, date_gmt: "2026-09-29T18:53:37" },
-          { id: 2, link: "https://truthnovel.top/2468-x/", title: { rendered: "2468 - عنوان" }, date_gmt: "2026-09-28T18:53:37" }
-        ]));
+        return {
+          ...ok(JSON.stringify([
+            { id: 3, link: "https://truthnovel.top/2469-x/", title: { rendered: "2469 - إستهزاء" }, date_gmt: "2026-09-29T18:53:37" },
+            { id: 2, link: "https://truthnovel.top/2468-x/", title: { rendered: "2468 - عنوان" }, date_gmt: "2026-09-28T18:53:37" }
+          ])),
+          headers: { "x-wp-total": "2", "x-wp-totalpages": "1" }
+        };
       }
     });
-    const latest = await fresh.fetchLatestChapters("https://truthnovel.top/?w4pl=257", 2469, ctx);
+    const latest = await fresh.fetchLatestChapters("https://truthnovel.top/?w4pl=257", 2, ctx);
     expect(pages).toBe(1);
-    expect(latest).toHaveLength(1);
-    expect(latest[0].number).toBe(2469);
-    expect(latest[0].url).toBe("https://truthnovel.top/2469-x/");
+    expect(latest).toEqual([]);
   });
 
   it("fetchLatestChapters returns every new chapter when the stored count runs ahead of chapter numbers", async () => {

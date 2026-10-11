@@ -37,7 +37,8 @@ describe('Wikisource Extension metadata', () => {
       'searchNovels',
       'getPopularNovels',
       'getCategories',
-      'getCategoryNovels'
+      'getCategoryNovels',
+      'fetchLatestChapters'
     ];
     for (const m of required) {
       expect(typeof ext[m]).toBe('function');

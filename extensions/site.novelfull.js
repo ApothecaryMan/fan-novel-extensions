@@ -8,7 +8,7 @@ registerExtension({
   id: 'site:novelfull',
   name: 'NovelFull',
   lang: 'en',
-  version: '1.2.6',
+  version: '1.2.7',
   apiVersion: 1,
   baseUrl: 'https://novelfull.com',
 
@@ -283,14 +283,9 @@ registerExtension({
     var html = await this._fetchCached(base, ctx);
     var pages = this._totalPages(html);
     if (pages <= 1) return this._finalizeChapters(this._parseChapterPage(html));
-    var lastHtml;
-    try {
-      lastHtml = await this._fetch(base + '?page=' + pages, ctx);
-    } catch (e) {
-      return [];
-    }
+    var lastHtml = await this._fetch(base + '?page=' + pages, ctx);
     var chaps = this._parseChapterPage(lastHtml);
-    if (!chaps.length) return [];
+    if (!chaps.length) throw new Error('فشل جلب أحدث الفصول');
     return this._finalizeChapters(chaps);
   },
 

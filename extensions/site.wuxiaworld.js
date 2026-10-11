@@ -14,7 +14,7 @@ registerExtension({
   id: 'site:wuxiaworld',
   name: 'WuxiaWorld',
   lang: 'en',
-  version: '1.0.2',
+  version: '1.0.3',
   apiVersion: 1,
   baseUrl: 'https://lite.wuxiaworld.com',
 
@@ -237,14 +237,9 @@ registerExtension({
     if (/<h1>\s*Not found\s*<\/h1>/i.test(html)) throw new Error('Novel not found');
     var pages = this._totalTocPages(html);
     if (pages <= 1) return this._finalizeChapters(this._parseTocPage(html));
-    var lastHtml;
-    try {
-      lastHtml = await this._fetch(fullUrl + '?toc=' + pages, ctx);
-    } catch (e) {
-      return [];
-    }
+    var lastHtml = await this._fetch(fullUrl + '?toc=' + pages, ctx);
     var chaps = this._parseTocPage(lastHtml);
-    if (!chaps.length) return [];
+    if (!chaps.length) throw new Error('فشل جلب أحدث الفصول');
     return this._finalizeChapters(chaps);
   },
 

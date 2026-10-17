@@ -27,14 +27,14 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:kolnovel'));
   it('has correct name', () => expect(ext.name).toBe('كول نوفيل'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.9.2'));
+  it('has correct version', () => expect(ext.version).toBe('1.10.0'));
   it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://kolnovel.com'));
 
   it('exposes all required methods', () => {
     const required = [
       'parseNovelInfo', 'parseChapterList', 'parseChapterContent',
-      'searchNovels', 'getPopularNovels', 'getCategories', 'getCategoryNovels',
+      'searchNovels', 'getPopularNovels', 'getCategories', 'getCategoryNovels', 'getSortOptions',
       'fetchLatestChapters', 'getComments', 'getCommentCount', 'postComment', 'voteComment',
     ];
     for (const m of required) {
@@ -1362,5 +1362,68 @@ describe('getComments', () => {
       exchangePath: '/api/auth/kolnovel/exchange',
     });
     expect(typeof ext.auth.registerUrl).toBe('string');
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────
+// Sort options (site-side /series/ orderings)
+// ──────────────────────────────────────────────────────────────────
+describe('getSortOptions', () => {
+  it('returns the six /series/ orderings with Arabic names', async () => {
+    const opts = await ext.getSortOptions({ log: () => {}, xFetch: async () => ({ ok: false }) });
+    expect(opts).toHaveLength(6);
+    expect(opts.every((o) => o.name && o.slug)).toBe(true);
+    const bySlug = Object.fromEntries(opts.map((o) => [o.slug, o.name]));
+    expect(bySlug.update).toBe('أخر التحديثات');
+    expect(bySlug.latest).toBe('أخر ما تم إضافته');
+    expect(bySlug.popular).toBe('الرائجة');
+    expect(bySlug.rating).toBe('التقييم');
+    expect(bySlug.title).toBe('A-Z');
+    expect(bySlug.titlereverse).toBe('Z-A');
+  });
+});
+
+describe('sorted browse', () => {
+  const captureCtx = (html, seen) => ({
+    log: () => {},
+    xFetch: async (url) => {
+      seen.push(typeof url === 'string' ? url : url.url);
+      return ok(html);
+    }
+  });
+
+  it('getPopularNovels with a sort hits /series/?order=', async () => {
+    const seen = [];
+    const results = await ext.getPopularNovels(1, 'update', captureCtx(GENRE_PAGE_ACTION, seen));
+    expect(seen[0]).toContain('/series/?order=update');
+    expect(results.length).toBeGreaterThan(0);
+  });
+
+  it('getPopularNovels with sort + page appends &page=', async () => {
+    const seen = [];
+    await ext.getPopularNovels(3, 'rating', captureCtx(GENRE_PAGE_ACTION, seen));
+    expect(seen[0]).toContain('/series/?order=rating');
+    expect(seen[0]).toContain('&page=3');
+  });
+
+  it('getPopularNovels without a sort keeps the homepage browse', async () => {
+    const seen = [];
+    await ext.getPopularNovels(1, captureCtx(HOME_PAGE, seen));
+    expect(seen[0]).not.toContain('/series/');
+  });
+
+  it('getCategoryNovels with a sort routes through the /series/ filter', async () => {
+    const seen = [];
+    const results = await ext.getCategoryNovels('action', 1, 'rating', captureCtx(GENRE_PAGE_ACTION, seen));
+    expect(seen[0]).toContain('/series/?genre%5B%5D=action');
+    expect(seen[0]).toContain('&order=rating');
+    expect(results.length).toBeGreaterThan(0);
+  });
+
+  it('getCategoryNovels without a sort keeps the /genre/ archive', async () => {
+    const seen = [];
+    await ext.getCategoryNovels('action', 1, captureCtx(GENRE_PAGE_ACTION, seen));
+    expect(seen[0]).toContain('/genre/action/');
+    expect(seen[0]).not.toContain('/series/');
   });
 });

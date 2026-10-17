@@ -59,7 +59,7 @@ describe('Extension metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:cenele'));
   it('has correct name', () => expect(ext.name).toBe('فضاء الروايات'));
   it('has correct lang', () => expect(ext.lang).toBe('ar'));
-  it('has correct version', () => expect(ext.version).toBe('1.12.3'));
+  it('has correct version', () => expect(ext.version).toBe('1.13.0'));
   it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('has correct baseUrl', () => expect(ext.baseUrl).toBe('https://cenele.com'));
 
@@ -67,7 +67,7 @@ describe('Extension metadata', () => {
     const required = [
       'parseNovelInfo', 'parseChapterList', 'parseChapterContent',
       'searchNovels', 'getPopularNovels',
-      'getCategories', 'getCategoryNovels', 'fetchLatestChapters',
+      'getCategories', 'getCategoryNovels', 'getSortOptions', 'fetchLatestChapters',
       'getComments', 'getCommentCount', 'getCommentReplies', 'postComment', 'voteComment',
     ];
     required.forEach((m) => expect(typeof ext[m]).toBe('function'));
@@ -825,5 +825,56 @@ describe('getComments (RSP)', () => {
     const ctx = mockCtx();
     await expect(ext.postComment('https://cenele.com/ch-test-40/', { body: 'x' }, ctx)).rejects.toThrow('تسجيل الدخول');
     await expect(ext.voteComment('https://cenele.com/ch-test-40/', { commentId: '101', vote: 1 }, ctx)).rejects.toThrow('تسجيل الدخول');
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────
+// Sort options (site-side ?m_orderby= orderings)
+// ──────────────────────────────────────────────────────────────────
+describe('getSortOptions', () => {
+  it('returns the five /cont/ orderings with Arabic names', async () => {
+    const opts = await ext.getSortOptions({ log: () => {}, xFetch: async () => ({ ok: false }) });
+    expect(opts).toHaveLength(5);
+    expect(opts.every((o) => o.name && o.slug)).toBe(true);
+    const bySlug = Object.fromEntries(opts.map((o) => [o.slug, o.name]));
+    expect(bySlug.latest).toBe('الأحدث');
+    expect(bySlug.views).toBe('الأكثر مشاهدة');
+    expect(bySlug.rating).toBe('التقييم');
+    expect(bySlug.gems).toBe('الأكثر تعزيزًا');
+    expect(bySlug.alphabet).toBe('A-Z');
+  });
+});
+
+describe('sorted browse', () => {
+  const captureCtx = (html, seen) => ({
+    log: () => {},
+    xFetch: async (url) => {
+      seen.push(typeof url === 'string' ? url : url.url);
+      return ok(html);
+    }
+  });
+
+  it('getPopularNovels with a sort hits /cont/?m_orderby=', async () => {
+    const seen = [];
+    const results = await ext.getPopularNovels(1, 'latest', captureCtx(REAL_BROWSE_PAGE, seen));
+    expect(seen[0]).toContain('/cont/');
+    expect(seen[0]).toContain('m_orderby=latest');
+    expect(results.length).toBe(10);
+  });
+
+  it('getPopularNovels without a sort keeps the most-viewed browse', async () => {
+    const seen = [];
+    await ext.getPopularNovels(1, captureCtx(REAL_BROWSE_PAGE, seen));
+    expect(seen[0]).toContain('m_orderby=views');
+  });
+
+  it('getCategoryNovels with a sort forwards it, defaulting to latest', async () => {
+    const seen = [];
+    await ext.getCategoryNovels('أكشن', 1, 'views', captureCtx(REAL_GENRE_PAGE, seen));
+    expect(seen[0]).toContain('cont-genre');
+    expect(seen[0]).toContain('m_orderby=views');
+    const seenDefault = [];
+    await ext.getCategoryNovels('أكشن', 1, captureCtx(REAL_GENRE_PAGE, seenDefault));
+    expect(seenDefault[0]).toContain('m_orderby=latest');
   });
 });

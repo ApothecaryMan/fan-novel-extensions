@@ -61,7 +61,7 @@ registerExtension({
   id: 'site:cenele',
   name: 'فضاء الروايات',
   lang: 'ar',
-  version: '1.12.3',
+  version: '1.13.0',
   apiVersion: 2,
   baseUrl: 'https://cenele.com',
 
@@ -692,8 +692,34 @@ registerExtension({
     return this._parseSearchRows(res.text);
   },
 
-  getPopularNovels: async function (page, ctx) {
-    return this.searchNovels('', page, ctx);
+  getPopularNovels: async function (page, sort, ctx) {
+    if (sort && typeof sort.xFetch === 'function') { ctx = sort; sort = ''; }
+    var order = (typeof sort === 'string' && sort) ? sort : '';
+    // No explicit order: keep the long-standing most-viewed browse.
+    if (!order) return this.searchNovels('', page, ctx);
+    return this._browseOrdered(order, page, ctx);
+  },
+
+  // Site-side catalogue orderings (verified against /cont/ order links).
+  getSortOptions: async function (ctx) {
+    return [
+      { name: 'الأحدث', slug: 'latest' },
+      { name: 'الأكثر مشاهدة', slug: 'views' },
+      { name: 'التقييم', slug: 'rating' },
+      { name: 'الأكثر تعزيزًا', slug: 'gems' },
+      { name: 'A-Z', slug: 'alphabet' }
+    ];
+  },
+
+  // Ordered main listing: /cont/?m_orderby=<order> (+ /page/N/).
+  _browseOrdered: async function (order, page, ctx) {
+    var pageNum = (page && page > 1) ? Math.floor(page) : 1;
+    var url = this._absUrl(pageNum > 1 ? '/cont/page/' + pageNum + '/' : '/cont/') + '?m_orderby=' + encodeURIComponent(order);
+    var res = await ctx.xFetch(url);
+    if (!res.ok) return [];
+    var results = this._parseNhvCards(res.text);
+    if (results.length) return results;
+    return this._parseSearchRows(res.text);
   },
 
   // Fallback parser for ?s=...&post_type=wp-manga rows.
@@ -753,12 +779,14 @@ registerExtension({
     return categories;
   },
 
-  getCategoryNovels: async function (categorySlug, page, ctx) {
+  getCategoryNovels: async function (categorySlug, page, sort, ctx) {
+    if (sort && typeof sort.xFetch === 'function') { ctx = sort; sort = ''; }
+    var order = (typeof sort === 'string' && sort) ? sort : 'latest';
     var slug = categorySlug || '';
     var pageNum = (page && page > 1) ? Math.floor(page) : 1;
     var url = this._absUrl('/cont-genre/' + encodeURIComponent(slug) + '/');
     if (pageNum > 1) url += 'page/' + pageNum + '/';
-    url += '?m_orderby=latest';
+    url += '?m_orderby=' + encodeURIComponent(order);
     var res = await ctx.xFetch(url);
     if (!res.ok) return [];
     return this._parseNhvCards(res.text);

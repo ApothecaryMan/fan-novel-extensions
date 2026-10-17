@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1791741016957,
+  "generatedAt": 1792263486757,
   "extensions": [
     {
       "id": "site:cenele",
       "name": "فضاء الروايات",
       "lang": "ar",
-      "version": "1.12.3",
+      "version": "1.13.0",
       "apiVersion": 2,
-      "size": 56776,
-      "sha256": "ffbaea2b365d44a3af166db288943fc13afce0ddc10d1e29c142258c12ea5010",
+      "size": 58144,
+      "sha256": "6c090e561bfc68507d72b2c96dd1a0c676e0a15d77a1f7b0c745252546abd1f5",
       "url": "site.cenele.js",
       "baseUrl": "https://cenele.com",
       "icon": "icons/cenele.png"
@@ -30,10 +30,10 @@
       "id": "site:kolnovel",
       "name": "كول نوفيل",
       "lang": "ar",
-      "version": "1.9.2",
+      "version": "1.10.0",
       "apiVersion": 2,
-      "size": 60009,
-      "sha256": "b7a15a00483193928a8b1cfcf3524df083b752426161d2df331a6605aed8568a",
+      "size": 61602,
+      "sha256": "5b76f69be850ff994b3822e4fd2441bf9f2cea238ecba808c16f696d89203a2c",
       "url": "site.kolnovel.js",
       "baseUrl": "https://kolnovel.com",
       "icon": "icons/kolnovel.png"
@@ -97,5 +97,5 @@
       "icon": "icons/wuxiaworld.png"
     }
   ],
-  "signature": "xtTdzYQHGG200NDe_uVOfgXdr5OJ89Hsf0KLczhuZ4jd9sqtuTSaIAUn2ZMTq9tbIGoF1vjp67tADSsm47peCg"
+  "signature": "CX2t11ay-HBmAJYTxZ9qbAy_2qfustPrkPxjH4p2XdJvF6ef_X9T5nlcTojWTg09AsiHWH4LdjMP1sN8iJw4BA"
 }

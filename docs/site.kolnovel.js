@@ -5,7 +5,7 @@ registerExtension({
   id: 'site:kolnovel',
   name: 'كول نوفيل',
   lang: 'ar',
-  version: '1.9.2',
+  version: '1.10.0',
   apiVersion: 2,
   baseUrl: 'https://kolnovel.com',
 
@@ -798,8 +798,29 @@ registerExtension({
     return results;
   },
 
-  getPopularNovels: async function (page, ctx) {
-    return this.searchNovels('', page, ctx);
+  getPopularNovels: async function (page, sort, ctx) {
+    if (sort && typeof sort.xFetch === 'function') { ctx = sort; sort = ''; }
+    var order = (typeof sort === 'string' && sort) ? sort : '';
+    // No explicit order: keep the long-standing homepage browse.
+    if (!order) return this.searchNovels('', page, ctx);
+    var pageNum = (page && page > 1) ? Math.floor(page) : 1;
+    var url = this._absUrl('/series/?order=' + encodeURIComponent(order) + (pageNum > 1 ? '&page=' + pageNum : ''));
+    var res = await this._safeFetch(url, ctx, 'فشل جلب التصفح المرتب');
+    if (!res.ok) return [];
+    // /series/ lists use the maindet layout (Strategy 1).
+    return this._parseMaindetCards(res.text);
+  },
+
+  // Site-side catalogue orderings (verified against the /series/ filter form).
+  getSortOptions: async function (ctx) {
+    return [
+      { name: 'أخر التحديثات', slug: 'update' },
+      { name: 'أخر ما تم إضافته', slug: 'latest' },
+      { name: 'الرائجة', slug: 'popular' },
+      { name: 'التقييم', slug: 'rating' },
+      { name: 'A-Z', slug: 'title' },
+      { name: 'Z-A', slug: 'titlereverse' }
+    ];
   },
 
   // ---------------------------------------------------------------
@@ -827,14 +848,23 @@ registerExtension({
 
   // Browse novels filtered by a genre.
   // URL: /genre/<slug>/  (pagination: /genre/<slug>/page/N/)
-  getCategoryNovels: async function (categorySlug, page, ctx) {
+  getCategoryNovels: async function (categorySlug, page, sort, ctx) {
+    if (sort && typeof sort.xFetch === 'function') { ctx = sort; sort = ''; }
+    var order = (typeof sort === 'string' && sort) ? sort : '';
     var slug = (categorySlug || '').replace(/\s+/g, '-');
     var pageNum = (page && page > 1) ? Math.floor(page) : 1;
-    var url = this._absUrl('/genre/' + encodeURIComponent(slug) + '/');
-    if (pageNum > 1) url += 'page/' + pageNum + '/';
+    // Ordered genre browse goes through the /series/ filter (genre archives
+    // have no ordering of their own); plain genre pages stay as they were.
+    var url;
+    if (order) {
+      url = this._absUrl('/series/?genre%5B%5D=' + encodeURIComponent(slug) + '&order=' + encodeURIComponent(order) + (pageNum > 1 ? '&page=' + pageNum : ''));
+    } else {
+      url = this._absUrl('/genre/' + encodeURIComponent(slug) + '/');
+      if (pageNum > 1) url += 'page/' + pageNum + '/';
+    }
     var res = await this._safeFetch(url, ctx, 'فشل جلب صفحة التصنيف');
     if (!res.ok) return [];
-    // Genre pages use the maindet layout (Strategy 1)
+    // Both layouts render maindet cards (Strategy 1)
     return this._parseMaindetCards(res.text);
   },
 

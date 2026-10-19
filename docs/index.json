@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1792434686591,
+  "generatedAt": 1792436534257,
   "extensions": [
     {
       "id": "site:cenele",
@@ -13,6 +13,17 @@
       "url": "site.cenele.js",
       "baseUrl": "https://cenele.com",
       "icon": "icons/cenele.png"
+    },
+    {
+      "id": "site:gutenberg",
+      "name": "Project Gutenberg",
+      "lang": "en",
+      "version": "1.0.0",
+      "apiVersion": 1,
+      "size": 183872,
+      "sha256": "f67e0812d4c8d2d016cf66222bbcd40cd7ead8fd3d6e47ac2251ce659d847807",
+      "url": "site.gutenberg.js",
+      "baseUrl": "https://www.gutenberg.org"
     },
     {
       "id": "site:hindawi",
@@ -97,5 +108,5 @@
       "icon": "icons/wuxiaworld.png"
     }
   ],
-  "signature": "XfsqHmpfg8cNi84DSRZgME9eUVlqFN9KjbGyuzeQtlCxpfjDSOUDiRbe8kqLEeHaKeC69-5pKnLmfR-D2EDsDg"
+  "signature": "uj5EQ1qpNSAx9cw-aDk2ZNdRAq831BViMnSzujyUEYV_TKI0wYSID7wH-D9SpBvg2X551Qs2t5xGJ_Q2WDfAAA"
 }

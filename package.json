@@ -8,6 +8,7 @@
     "generate-keys": "node scripts/generate-keys.mjs",
     "build": "node scripts/build-index.mjs",
     "build:sign": "node scripts/build-index.mjs --sign",
+    "build:catalog": "node scripts/build-gutenberg-catalog.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "postinstall": "node scripts/install-hooks.mjs"

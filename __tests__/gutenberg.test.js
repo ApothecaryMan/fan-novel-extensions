@@ -154,7 +154,19 @@ describe('Gutenberg metadata and chapters', () => {
     expect(chapters.some((c) => /caption/i.test(c.title))).toBe(false);
   });
 
-  it('returns only the selected chapter and strips the pg footer', async () => {
+  it('joins hard-wrapped html lines and preserves verse breaks', async () => {
+    const url = 'https://www.gutenberg.org/ebooks/1342';
+    const ctx = mockCtx({ 'pg1342-images.html': ok(BOOK_HTML) });
+    await ext.parseChapterList(url, ctx);
+
+    const content = await ext.parseChapterContent(url + '#Chapter_I', ctx);
+    expect(content).toContain('First chapter paragraph one continues on the next line.');
+    expect(content).toContain('Windows line one continues here.');
+    expect(content).toContain('Line one\nLine two\nLine three.');
+    expect(content).not.toContain('\r');
+  });
+
+  it('returns only the selected chapter and strips every footer form', async () => {
     const url = 'https://www.gutenberg.org/ebooks/1342';
     const ctx = mockCtx({ 'pg1342-images.html': ok(BOOK_HTML) });
     await ext.parseChapterList(url, ctx);
@@ -165,6 +177,7 @@ describe('Gutenberg metadata and chapters', () => {
     expect(content).not.toContain('First chapter paragraph');
     expect(content).not.toContain('A caption.');
     expect(content).not.toContain('LICENSE');
+    expect(content).not.toContain('Footer element');
   });
 
   it('falls back to plain text and the ebook page for unknown ids', async () => {

@@ -1,6 +1,6 @@
 // @id       site:gutenberg
 // @name     Project Gutenberg
-// @version  1.0.0
+// @version  1.0.1
 // @lang     en
 // @apiVersion 1
 // @baseUrl  https://www.gutenberg.org
@@ -317,10 +317,29 @@ function removeBalancedDiv(html, id) {
   return s;
 }
 
+function removeBlock(html, tag) {
+  var s = String(html || '');
+  var openRe = new RegExp('<' + tag + '\\b[^>]*>', 'i');
+  var open = openRe.exec(s);
+  if (!open) return s;
+  var start = open.index;
+  var tagRe = new RegExp('</?' + tag + '\\b[^>]*>', 'gi');
+  tagRe.lastIndex = start + open[0].length;
+  var depth = 1;
+  var m;
+  while ((m = tagRe.exec(s)) !== null) {
+    depth += m[0].charAt(1) === '/' ? -1 : 1;
+    if (depth === 0) return s.substring(0, start) + s.substring(m.index + m[0].length);
+  }
+  return s;
+}
+
 function cleanHtmlSlice(html) {
   var s = String(html || '');
   s = removeBalancedDiv(s, 'pg-footer');
   s = removeBalancedDiv(s, 'pg-header');
+  s = removeBlock(s, 'footer');
+  s = removeBlock(s, 'header');
   s = s.replace(/<script[\s\S]*?<\/script>/gi, '');
   s = s.replace(/<style[\s\S]*?<\/style>/gi, '');
   s = s.replace(/<span[^>]*class="[^"]*pagenum[^"]*"[^>]*>[\s\S]*?<\/span>/gi, '');
@@ -331,17 +350,29 @@ function cleanHtmlSlice(html) {
   s = s.replace(/<img\b[^>]*\balt="([A-Za-z])"[^>]*>/gi, '$1');
   s = s.replace(/<table[\s\S]*?<\/table>/gi, '');
   s = s.replace(/<sup[^>]*>\s*\d+\s*<\/sup>/gi, '');
-  s = s.replace(/<br\s*\/?>/gi, '\n');
+  s = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+  var br = '\uE000';
+  s = s.replace(/<br\s*\/?>/gi, br);
   s = s.replace(/<\/(p|div|h[1-6]|li|blockquote|tr)>/gi, '\n\n');
   s = s.replace(/<[^>]+>/g, '');
   s = decodeEntities(s);
   s = s.replace(/[ \t]+\n/g, '\n');
-  s = s.replace(/\n{3,}/g, '\n\n');
+
+  var blocks = s.split(/\n{2,}/);
+  var out = [];
+  for (var i = 0; i < blocks.length; i++) {
+    var block = blocks[i].replace(/\n/g, ' ').replace(/[ \t]{2,}/g, ' ').trim();
+    if (block) out.push(block);
+  }
+  s = out.join('\n\n');
+  s = s.split(br).join('\n');
+  s = s.replace(/[ \t]*\n[ \t]*/g, '\n');
   return s.trim();
 }
 
 function cleanTextSlice(text) {
-  var s = String(text || '').replace(/\r\n/g, '\n');
+  var s = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   s = s.replace(/\[Illustration[^\]]*\]/gi, '');
   var parts = s.split(/\n\s*\n/);
   var out = [];
@@ -424,30 +455,33 @@ function chaptersFromHtml(html, id) {
   if (selected.length === 0) return [];
 
   selected.sort(function (a, b) { return a.heading.start - b.heading.start; });
-  var chapters = [];
-  var starts = Object.create(null);
+  var items = [];
+  var seenStart = Object.create(null);
   for (var s = 0; s < selected.length; s++) {
     var item = selected[s];
-    var heading = item.heading;
-    if (starts[heading.start]) continue;
-    starts[heading.start] = true;
-    var title = headingTitle(heading.inner, item.tocText);
-    if (!title || META_HEADING_RE.test(title)) continue;
-    chapters.push({ heading: heading, title: title });
+    if (seenStart[item.heading.start]) continue;
+    seenStart[item.heading.start] = true;
+    items.push(item);
   }
 
   var out = [];
-  for (var c = 0; c < chapters.length; c++) {
-    var current = chapters[c];
-    var next = chapters[c + 1];
+  for (var c = 0; c < items.length; c++) {
+    var current = items[c];
+    var heading = current.heading;
+    var next = items[c + 1];
+    var end = next ? next.heading.start : html.length;
+    var title = headingTitle(heading.inner, current.tocText);
+    if (!title || META_HEADING_RE.test(title)) continue;
+    var content = cleanHtmlSlice(html.substring(heading.end, end));
+    if (content.length < 10) continue;
     out.push({
-      anchor: current.heading.anchor,
-      title: current.title,
-      start: current.heading.start,
-      contentStart: current.heading.end,
-      end: next ? next.heading.start : html.length,
-      number: c + 1,
-      url: canonicalUrl(id) + '#' + current.heading.anchor
+      anchor: heading.anchor,
+      title: title,
+      start: heading.start,
+      contentStart: heading.end,
+      end: end,
+      number: out.length + 1,
+      url: canonicalUrl(id) + '#' + heading.anchor
     });
   }
   return out;
@@ -476,15 +510,29 @@ function chaptersFromText(text, id) {
   var out = [];
   for (var i = 0; i < marks.length; i++) {
     var next = marks[i + 1];
+    var contentStart = marks[i].start + marks[i].len;
+    var end = next ? next.start : s.length;
+    if (cleanTextSlice(s.substring(contentStart, end)).length < 10) continue;
     out.push({
       anchor: '',
-      title: marks[i].title || 'Chapter ' + (i + 1),
+      title: marks[i].title || 'Chapter ' + (out.length + 1),
       start: marks[i].start,
-      contentStart: marks[i].start + marks[i].len,
-      end: next ? next.start : s.length,
-      number: i + 1,
-      url: canonicalUrl(id) + '#pg-chapter-' + (i + 1)
+      contentStart: contentStart,
+      end: end,
+      number: out.length + 1,
+      url: canonicalUrl(id) + '#pg-chapter-' + (out.length + 1)
     });
+  }
+  if (out.length === 0) {
+    return [{
+      anchor: '',
+      title: 'Full text',
+      start: 0,
+      contentStart: 0,
+      end: s.length,
+      number: 1,
+      url: canonicalUrl(id)
+    }];
   }
   return out;
 }
@@ -678,7 +726,7 @@ registerExtension({
   id: 'site:gutenberg',
   name: 'Project Gutenberg',
   lang: 'en',
-  version: '1.0.0',
+  version: '1.0.1',
   apiVersion: 1,
   baseUrl: 'https://www.gutenberg.org',
 

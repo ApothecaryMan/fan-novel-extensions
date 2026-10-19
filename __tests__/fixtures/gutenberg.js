@@ -5,6 +5,7 @@ export const BOOK_HTML = `<!DOCTYPE html>
 <div class="toc">
 <a href="#PREFACE" class="pginternal">Preface.</a>
 <a href="#LIST_OF_ILLUSTRATIONS" class="pginternal">List of Illustrations.</a>
+<a href="#THE_ODYSSEY" class="pginternal">THE ODYSSEY</a>
 <a href="#Chapter_I" class="pginternal">Chapter I.</a>
 <a href="#Chapter_II" class="pginternal">Chapter II.</a>
 </div>
@@ -13,14 +14,19 @@ export const BOOK_HTML = `<!DOCTYPE html>
 <p>Preface paragraph.</p>
 <h2><a id="LIST_OF_ILLUSTRATIONS"></a><span class="pagenum"><a id="page_xxv">{xxv}</a></span> <img alt="List of Illustrations." src="images/l.png"></h2>
 <p>Illustration list noise.</p>
+<h2><a id="THE_ODYSSEY"></a>THE ODYSSEY</h2>
 <h2><a id="Chapter_I"></a> Chapter I.</h2>
-<p>First chapter paragraph one.</p>
+<p>First chapter paragraph one
+continues on the next line.</p>
+<p>Windows line one\r\ncontinues here.</p>
+<p class="verse">Line one<br>Line two<br>Line three.</p>
 <p>First chapter paragraph two.</p>
 <h2><a id="Chapter_II"></a><img alt="" src="images/i.png"><span class="caption">A caption.</span><br><br>Chapter II.</h2>
 <p class="nind"><span class="letra"> <img alt="M" src="images/m.png"></span>R. BENNET was here.</p>
 <p>Second chapter paragraph two.</p>
 <div id="pg-footer"><h2>THE FULL PROJECT GUTENBERG LICENSE</h2>
 <p>License text must not appear in chapter content.</p></div>
+<footer><p>Footer element must not appear in chapter content.</p></footer>
 </body></html>`;
 
 export const EBOOK_HTML = `<!DOCTYPE html>

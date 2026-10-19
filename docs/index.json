@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1792437321271,
+  "generatedAt": 1792438603533,
   "extensions": [
     {
       "id": "site:cenele",
@@ -18,10 +18,10 @@
       "id": "site:gutenberg",
       "name": "Project Gutenberg",
       "lang": "en",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "apiVersion": 1,
-      "size": 186203,
-      "sha256": "ad3a54c70f400d2353f9338642f7c0b05d531fc092c399edbaf6caadd54d179f",
+      "size": 187592,
+      "sha256": "8e86cd7603a6ab412bf2067478f7772ab44633de97e29a7acc991c78de8d58fd",
       "url": "site.gutenberg.js",
       "baseUrl": "https://www.gutenberg.org"
     },
@@ -108,5 +108,5 @@
       "icon": "icons/wuxiaworld.png"
     }
   ],
-  "signature": "YrLomRrsBspSMhiDkT9H1ShE32u8yjLJVPXaMONN9Me4dFtoTUKpPueBTRW92937O75ymu3K_kBmOIyItJGNCA"
+  "signature": "jaF4RXBll617atm876xDe6N8mPlO5vcKB7-Ui8iUiLGKaQwBsTWyiKP6rZqQEHE7fAa06MSuqEQ7Z4ERruljBw"
 }

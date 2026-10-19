@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Generate extensions/site.gutenberg.js from the official Project Gutenberg CSV feed.
-// Usage: npm run build:catalog
+// Usage: npm run build:catalog [-- --refresh]
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { get as httpsGet } from 'node:https';
 import { join, dirname } from 'node:path';
@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const TEMPLATE = join(ROOT, 'scripts', 'gutenberg-extension.template.js');
 const OUT = join(ROOT, 'extensions', 'site.gutenberg.js');
+const CACHE_DIR = join(ROOT, 'scripts', '.cache');
+const CACHE_CSV = join(CACHE_DIR, 'pg_catalog.csv.gz');
 const CATALOG_CSV = 'https://www.gutenberg.org/cache/epub/feeds/pg_catalog.csv.gz';
 const TOP_PAGE = 'https://www.gutenberg.org/browse/scores/top';
 const LIMIT = 2000;
@@ -149,8 +151,18 @@ function tagsFromText(text) {
 }
 
 async function main() {
-  console.log('⬇️  Downloading Project Gutenberg catalog…');
-  const gz = await fetchBuffer(CATALOG_CSV);
+  const refresh = process.argv.includes('--refresh');
+  let gz;
+  if (!refresh && existsSync(CACHE_CSV)) {
+    console.log('📦 Using cached Project Gutenberg catalog…');
+    gz = readFileSync(CACHE_CSV);
+  } else {
+    console.log('⬇️  Downloading Project Gutenberg catalog…');
+    gz = await fetchBuffer(CATALOG_CSV);
+    mkdirSync(CACHE_DIR, { recursive: true });
+    writeFileSync(CACHE_CSV, gz);
+    console.log('   cached catalog for next run');
+  }
   const csv = gunzipSync(gz).toString('utf8');
   console.log(`   ${(csv.length / 1024 / 1024).toFixed(1)} MB decompressed`);
 

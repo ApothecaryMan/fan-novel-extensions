@@ -1,6 +1,6 @@
 // @id       site:gutenberg
 // @name     Project Gutenberg
-// @version  1.0.1
+// @version  1.0.2
 // @lang     en
 // @apiVersion 1
 // @baseUrl  https://www.gutenberg.org
@@ -49,9 +49,23 @@ var TAG_DEFS = [
   ['history', /\bhistory\b/i]
 ];
 
-var META_HEADING_RE = /^(contents|table of contents|list of illustrations|illustrations|index|end notes|footnotes|transcriber|colophon|advertisement|cover)\b/i;
+var META_HEADING_RE = /^(contents|table of contents|list of illustrations|illustrations|index|end notes|footnotes|notes|transcriber|colophon|advertisement|cover|the project gutenberg|project gutenberg|the full project gutenberg)\b/i;
 var CHAPTER_HEADING_RE = /^(chapter|book|part|section|prologue|epilogue|introduction|preface|foreword|afterword)\b/i;
-var CHAPTER_MARK_RE = /^[ \t]*((?:chapter|book|part|section)\s+(?:the\s+)?(?:[ivxlcdm]+|\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|first|second|third|fourth|fifth)\b[^\n]{0,80}|(?:prologue|epilogue|introduction|preface|foreword|afterword)[^\n]{0,80}|(?:الفصل|الباب|الجزء|الكتاب)[^\n]{0,80})[ \t]*$/gim;
+var CHAPTER_MARK_RE = /^[ \t]*((?:chapter|book|part|section)\s+(?:the\s+)?(?:[ivxlcdm]+|\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|first|second|third|fourth|fifth)\b[^\n]{0,80}|(?:prologue|epilogue|introduction|preface|foreword|afterword)[^\n]{0,40}|(?:الفصل|الباب|الجزء|الكتاب)[^\n]{0,80})[ \t]*$/gim;
+
+function isFalseTextHeading(title) {
+  var t = String(title || '').trim();
+  var tail = t.replace(/^(?:chapter|book|part|section)\s+(?:the\s+)?(?:[ivxlcdm]+|\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|first|second|third|fourth|fifth)\b/i, '')
+    .replace(/^[\s.,:;—-]+/, '');
+  if (/^(?:is|are|was|were|has|have|had|will|would|should|could|may|might|must|can|and|or|but|to)\b/i.test(tail)) {
+    return true;
+  }
+  if (/^(?:introduction|preface|foreword|prologue|epilogue|afterword)\b/i.test(t) &&
+      !/^(?:INTRODUCTION|Introduction|PREFACE|Preface|FOREWORD|Foreword|PROLOGUE|Prologue|EPILOGUE|Epilogue|AFTERWORD|Afterword)\b/.test(t)) {
+    return true;
+  }
+  return false;
+}
 
 var CATALOG_INDEX = null;
 var SEARCH_INDEX = null;
@@ -128,7 +142,7 @@ function headingTitle(inner, tocText) {
     .replace(/<span[^>]*class="[^"]*(?:pagenum|caption)[^"]*"[^>]*>[\s\S]*?<\/span>/gi, '')
     .replace(/<[^>]+>/g, ' ');
   var title = cleanText(cleaned);
-  if (!title || /^\{?[ivxlcdm\d]+\}?\.?$/i.test(title)) {
+  if (!title || /^\{[^}]+\}$/.test(title) || /^\d+$/.test(title)) {
     title = cleanText(tocText || alt);
   }
   var marker = title.search(/\b(?:chapter|book|part|section)\s+(?:the\s+)?(?:[ivxlcdm]+|\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|first|second|third|fourth|fifth)\b/i);
@@ -395,6 +409,55 @@ function stripTextBoilerplate(raw) {
   return s.trim();
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isBoilerplateId(anchor) {
+  if (!anchor) return false;
+  if (/^pg[-_]/i.test(anchor)) return true;
+  if (/^page_/i.test(anchor)) return true;
+  if (/^linknote/i.test(anchor)) return true;
+  if (/^link2H_(?:PAGE|ILL|FIG|IMG|PLATE|FN|FOOT|TOC)\b/i.test(anchor)) return true;
+  if (/^(?:illustration|figure|plate|img|fn|footnote|page)[-_]/i.test(anchor)) return true;
+  if (/^(?:note|endnote|footnote|fn)[-_]?\d/i.test(anchor)) return true;
+  return false;
+}
+
+function isBoilerplateHeading(anchor, title) {
+  if (isBoilerplateId(anchor)) return true;
+  if (/\bproject\s+gutenberg\b/i.test(title || '')) return true;
+  return META_HEADING_RE.test(title || '');
+}
+
+function findIdPos(html, id) {
+  var re = new RegExp('\\bid="' + escapeRegExp(id) + '"', 'i');
+  var m = re.exec(html);
+  return m ? m.index : -1;
+}
+
+function findHeadingForAnchor(headings, pos, limit) {
+  var i;
+  for (i = 0; i < headings.length; i++) {
+    var h = headings[i];
+    if (h.start <= pos && pos < h.end) return h;
+  }
+  for (i = 0; i < headings.length; i++) {
+    var next = headings[i];
+    if (next.start > pos && next.start < limit) return next;
+  }
+  return null;
+}
+
+function limitAtBoundary(boundaries, after, before) {
+  var best = before;
+  for (var i = 0; i < boundaries.length; i++) {
+    var pos = boundaries[i];
+    if (pos > after && pos < best) best = pos;
+  }
+  return best;
+}
+
 function chaptersFromHtml(html, id) {
   var headings = [];
   var headingRe = /<h([1-6])\b([^>]*)>([\s\S]*?)<\/h\1>/gi;
@@ -408,20 +471,18 @@ function chaptersFromHtml(html, id) {
       var innerMatch = inner.match(/<a[^>]*\bid="([^"]+)"/i);
       if (innerMatch) anchor = innerMatch[1];
     }
-    var title = headingTitle(inner, '');
-    if (!anchor) continue;
-    if (/^page_/i.test(anchor)) continue;
-    if (title && META_HEADING_RE.test(title)) continue;
-    headings.push({ anchor: anchor, title: title, inner: inner, start: m.index, end: m.index + m[0].length });
-  }
-  if (headings.length === 0) return [];
-
-  var byAnchor = Object.create(null);
-  for (var i = 0; i < headings.length; i++) {
-    if (!byAnchor[headings[i].anchor]) byAnchor[headings[i].anchor] = headings[i];
+    headings.push({
+      anchor: anchor,
+      title: headingTitle(inner, ''),
+      inner: inner,
+      start: m.index,
+      end: m.index + m[0].length,
+      index: headings.length
+    });
   }
 
   var tocLinks = [];
+  var boundaries = [];
   var seen = Object.create(null);
   var anchorRe = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
   while ((m = anchorRe.exec(html)) !== null) {
@@ -429,59 +490,82 @@ function chaptersFromHtml(html, id) {
     var hrefMatch = m[1].match(/\bhref="#([^"]+)"/i);
     if (!hrefMatch) continue;
     var tocId = hrefMatch[1];
-    if (seen[tocId] || /^page_/i.test(tocId)) continue;
-    if (!byAnchor[tocId]) continue;
+    if (seen[tocId] || isBoilerplateId(tocId)) continue;
+    var tocText = cleanText(m[2]);
+    if (/^\[\d+\]$/.test(tocText) || /^\d+\[\]$/.test(tocText)) continue;
+    var pos = findIdPos(html, tocId);
+    if (pos === -1) continue;
+    if (tocText && isBoilerplateHeading(tocId, tocText)) {
+      boundaries.push(pos);
+      continue;
+    }
     seen[tocId] = true;
-    tocLinks.push({ id: tocId, text: cleanText(m[2]) });
+    tocLinks.push({ id: tocId, text: tocText, pos: pos });
   }
-
-  var selected = [];
-  if (tocLinks.length > 0) {
-    for (var t = 0; t < tocLinks.length; t++) {
-      selected.push({ heading: byAnchor[tocLinks[t].id], tocText: tocLinks[t].text });
-    }
-  } else {
-    for (var h = 0; h < headings.length; h++) {
-      if (CHAPTER_HEADING_RE.test(headings[h].title)) {
-        selected.push({ heading: headings[h], tocText: '' });
-      }
-    }
-    if (selected.length === 0 && headings.length >= 2) {
-      for (var all = 0; all < headings.length; all++) {
-        selected.push({ heading: headings[all], tocText: '' });
-      }
-    }
-  }
-  if (selected.length === 0) return [];
-
-  selected.sort(function (a, b) { return a.heading.start - b.heading.start; });
-  var items = [];
-  var seenStart = Object.create(null);
-  for (var s = 0; s < selected.length; s++) {
-    var item = selected[s];
-    if (seenStart[item.heading.start]) continue;
-    seenStart[item.heading.start] = true;
-    items.push(item);
-  }
+  tocLinks.sort(function (a, b) { return a.pos - b.pos; });
+  boundaries.sort(function (a, b) { return a - b; });
 
   var out = [];
-  for (var c = 0; c < items.length; c++) {
-    var current = items[c];
-    var heading = current.heading;
-    var next = items[c + 1];
-    var end = next ? next.heading.start : html.length;
-    var title = headingTitle(heading.inner, current.tocText);
-    if (!title || META_HEADING_RE.test(title)) continue;
-    var content = cleanHtmlSlice(html.substring(heading.end, end));
+  var t;
+  for (t = 0; t < tocLinks.length; t++) {
+    var link = tocLinks[t];
+    var nextLink = tocLinks[t + 1];
+    var end = nextLink ? nextLink.pos : html.length;
+    end = limitAtBoundary(boundaries, link.pos, end);
+    var tocHeading = findHeadingForAnchor(headings, link.pos, end);
+    var title = tocHeading ? headingTitle(tocHeading.inner, link.text) : cleanText(link.text);
+    if (!title || isBoilerplateHeading(link.id, title) || /^\{[^}]+\}$/.test(title)) continue;
+    var contentStart = tocHeading && tocHeading.end > link.pos ? tocHeading.end : link.pos;
+    if (contentStart > end) contentStart = link.pos;
+    var content = cleanHtmlSlice(html.substring(contentStart, end));
     if (content.length < 10) continue;
     out.push({
-      anchor: heading.anchor,
+      anchor: link.id,
       title: title,
-      start: heading.start,
-      contentStart: heading.end,
+      start: link.pos,
+      contentStart: contentStart,
       end: end,
       number: out.length + 1,
-      url: canonicalUrl(id) + '#' + heading.anchor
+      url: canonicalUrl(id) + '#' + link.id
+    });
+  }
+  if (out.length > 0) return out;
+
+  var candidates = [];
+  var h;
+  for (h = 0; h < headings.length; h++) {
+    var heading = headings[h];
+    if (!heading.title) continue;
+    if (isBoilerplateHeading(heading.anchor, heading.title)) continue;
+    candidates.push(heading);
+  }
+  if (candidates.length === 0) return [];
+
+  var chapterLike = [];
+  for (h = 0; h < candidates.length; h++) {
+    if (CHAPTER_HEADING_RE.test(candidates[h].title)) chapterLike.push(candidates[h]);
+  }
+  var selected = chapterLike.length >= 2 ? chapterLike : candidates;
+
+  for (var s = 0; s < selected.length; s++) {
+    var current = selected[s];
+    var nextHeading = selected[s + 1];
+    var start = current.start;
+    var startContent = current.end;
+    var stop = nextHeading ? nextHeading.start : html.length;
+    var currentTitle = headingTitle(current.inner, '');
+    if (!currentTitle || isBoilerplateHeading(current.anchor, currentTitle)) continue;
+    var currentContent = cleanHtmlSlice(html.substring(startContent, stop));
+    if (currentContent.length < 10) continue;
+    var currentAnchor = current.anchor || ('pg-heading-' + current.index);
+    out.push({
+      anchor: currentAnchor,
+      title: currentTitle,
+      start: start,
+      contentStart: startContent,
+      end: stop,
+      number: out.length + 1,
+      url: canonicalUrl(id) + '#' + currentAnchor
     });
   }
   return out;
@@ -493,7 +577,10 @@ function chaptersFromText(text, id) {
   var m;
   CHAPTER_MARK_RE.lastIndex = 0;
   while ((m = CHAPTER_MARK_RE.exec(s)) !== null) {
-    marks.push({ title: m[1].trim(), start: m.index, len: m[0].length });
+    var markTitle = m[1].trim();
+    if (!isFalseTextHeading(markTitle)) {
+      marks.push({ title: markTitle, start: m.index, len: m[0].length });
+    }
     if (m[0].length === 0) CHAPTER_MARK_RE.lastIndex++;
   }
   if (marks.length === 0) {
@@ -507,6 +594,19 @@ function chaptersFromText(text, id) {
       url: canonicalUrl(id)
     }];
   }
+
+  var firstReal = 0;
+  for (var r = 0; r < marks.length; r++) {
+    var nextMark = marks[r + 1];
+    var afterMark = marks[r].start + marks[r].len;
+    var beforeMark = nextMark ? nextMark.start : s.length;
+    if (cleanTextSlice(s.substring(afterMark, beforeMark)).length >= 40) {
+      firstReal = r;
+      break;
+    }
+  }
+  if (firstReal > 0) marks = marks.slice(firstReal);
+
   var out = [];
   for (var i = 0; i < marks.length; i++) {
     var next = marks[i + 1];
@@ -726,7 +826,7 @@ registerExtension({
   id: 'site:gutenberg',
   name: 'Project Gutenberg',
   lang: 'en',
-  version: '1.0.1',
+  version: '1.0.2',
   apiVersion: 1,
   baseUrl: 'https://www.gutenberg.org',
 

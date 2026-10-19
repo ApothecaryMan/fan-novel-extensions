@@ -44,6 +44,89 @@ export const EBOOK_HTML = `<!DOCTYPE html>
 </table>
 </body></html>`;
 
+export const ANCHOR_BOOK_HTML = `<!DOCTYPE html>
+<html lang="en"><body>
+<div id="pg-header"><h1 id="pg-header-heading">The Project Gutenberg eBook of Anchor Test</h1></div>
+<div class="toc">
+<a href="#link2HCH0001" class="pginternal">CHAPTER I</a>
+<a href="#link2HCH0002" class="pginternal">CHAPTER II</a>
+<a href="#chap25" class="pginternal">FOOTNOTES:</a>
+</div>
+<p><a id="link2HCH0001"></a></p>
+<h2>CHAPTER I</h2>
+<p>Anchor chapter one body.<a href="#linknote-1" class="pginternal">[1]</a></p>
+<p><a id="link2HCH0002"></a></p>
+<h2>CHAPTER II</h2>
+<p>Anchor chapter two body.</p>
+<h2><a id="chap25"></a>FOOTNOTES:</h2>
+<p><a id="linknote-1"></a>Footnote text must not appear.</p>
+<div id="pg-footer"><h2 id="pg-footer-heading">THE FULL PROJECT GUTENBERG™ LICENSE</h2>
+<p>License.</p></div>
+</body></html>`;
+
+export const NO_TOC_BOOK_HTML = `<!DOCTYPE html>
+<html lang="en"><body>
+<div id="pg-header"><h1 id="pg-header-heading">The Project Gutenberg eBook of No Toc Test</h1></div>
+<h2><a id="section1"></a>SECTION ONE</h2>
+<p>Section one body.</p>
+<h2><a id="section2"></a>SECTION TWO</h2>
+<p>Section two body.</p>
+<div id="pg-footer"><h2 id="pg-footer-heading">THE FULL PROJECT GUTENBERG™ LICENSE</h2>
+<p>License.</p></div>
+</body></html>`;
+
+export const PG_ONLY_HTML = `<!DOCTYPE html>
+<html lang="en"><body>
+<div id="pg-header"><h1 id="pg-header-heading">The Project Gutenberg eBook of PG Only Test</h1></div>
+<p>Body paragraph without any chapter headings.</p>
+<div id="pg-footer"><h2 id="pg-footer-heading">THE FULL PROJECT GUTENBERG™ LICENSE</h2>
+<p>License.</p></div>
+</body></html>`;
+
+export const TEXT_BOOK_WITH_TOC = `The Project Gutenberg eBook of Test Text Book
+
+*** START OF THE PROJECT GUTENBERG EBOOK TEST TEXT BOOK ***
+
+CONTENTS
+
+CHAPTER I.
+THE ODYSSEY
+CHAPTER II.
+
+CHAPTER I.
+
+First body paragraph that is long enough to be a real chapter.
+
+CHAPTER II.
+
+Second body paragraph that is long enough to be a real chapter.
+
+*** END OF THE PROJECT GUTENBERG EBOOK TEST TEXT BOOK ***
+`;
+
+export const TEXT_BOOK_FALSE_MARKS = `The Project Gutenberg eBook of Test Text Book
+
+*** START OF THE PROJECT GUTENBERG EBOOK TEST TEXT BOOK ***
+
+CHAPTER I.
+
+First body paragraph that is long enough to be a real chapter.
+
+introduction to English literature. My first acquaintance was (or were) very long.
+
+This paragraph follows the false introduction line.
+
+Book i., is continued to the end of Book iv., and not resumed till the middle.
+
+This paragraph follows the false book line.
+
+CHAPTER II.
+
+Second body paragraph that is long enough to be a real chapter.
+
+*** END OF THE PROJECT GUTENBERG EBOOK TEST TEXT BOOK ***
+`;
+
 export const TEXT_BOOK = `The Project Gutenberg eBook of Test Text Book
 
 *** START OF THE PROJECT GUTENBERG EBOOK TEST TEXT BOOK ***

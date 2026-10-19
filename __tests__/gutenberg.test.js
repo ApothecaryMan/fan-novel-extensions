@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { loadExtension, mockCtx, ok } from './helpers.js';
-import { BOOK_HTML, EBOOK_HTML, TEXT_BOOK } from './fixtures/gutenberg.js';
+import { ANCHOR_BOOK_HTML, BOOK_HTML, EBOOK_HTML, NO_TOC_BOOK_HTML, PG_ONLY_HTML, TEXT_BOOK, TEXT_BOOK_FALSE_MARKS, TEXT_BOOK_WITH_TOC } from './fixtures/gutenberg.js';
 
 let ext;
 
@@ -123,6 +123,72 @@ describe('Gutenberg sorted browse', () => {
     const legacy = await ext.getCategoryNovels('poetry', 1, mockCtx());
     const explicit = await ext.getCategoryNovels('poetry', 1, 'popular', mockCtx());
     expect(legacy.map((r) => r.url)).toEqual(explicit.map((r) => r.url));
+  });
+});
+
+describe('Gutenberg chapter extraction', () => {
+  it('maps standalone TOC anchors to the next heading', async () => {
+    const url = 'https://www.gutenberg.org/ebooks/111111';
+    const ctx = mockCtx({ 'pg111111-images.html': ok(ANCHOR_BOOK_HTML) });
+    const chapters = await ext.parseChapterList(url, ctx);
+
+    expect(chapters.map((c) => c.title)).toEqual(['CHAPTER I', 'CHAPTER II']);
+    expect(chapters.every((c) => !/project gutenberg/i.test(c.title))).toBe(true);
+
+    const content = await ext.parseChapterContent(chapters[0].url, ctx);
+    expect(content).toContain('Anchor chapter one body.');
+    expect(content).not.toContain('Anchor chapter two');
+    expect(content).not.toContain('Project Gutenberg');
+
+    const last = await ext.parseChapterContent(chapters[1].url, ctx);
+    expect(last).not.toContain('Footnote text');
+    expect(last).not.toContain('FOOTNOTES');
+  });
+
+  it('never exposes Gutenberg headings when there is no TOC', async () => {
+    const url = 'https://www.gutenberg.org/ebooks/222222';
+    const ctx = mockCtx({ 'pg222222-images.html': ok(NO_TOC_BOOK_HTML) });
+    const chapters = await ext.parseChapterList(url, ctx);
+
+    expect(chapters.map((c) => c.title)).toEqual(['SECTION ONE', 'SECTION TWO']);
+    expect(chapters.every((c) => !/project gutenberg/i.test(c.title))).toBe(true);
+  });
+
+  it('falls back to text instead of inventing Project Gutenberg chapters', async () => {
+    const url = 'https://www.gutenberg.org/ebooks/333333';
+    const ctx = mockCtx({
+      'pg333333-images.html': ok(PG_ONLY_HTML),
+      'pg333333.txt': ok(TEXT_BOOK)
+    });
+    const chapters = await ext.parseChapterList(url, ctx);
+
+    expect(chapters.map((c) => c.title)).toEqual(['CHAPTER I.', 'CHAPTER II.']);
+    expect(chapters.every((c) => !/project gutenberg/i.test(c.title))).toBe(true);
+  });
+
+  it('skips a plain-text table of contents', async () => {
+    const url = 'https://www.gutenberg.org/ebooks/444444';
+    const ctx = mockCtx({
+      'pg444444-images.html': ok(PG_ONLY_HTML),
+      'pg444444.txt': ok(TEXT_BOOK_WITH_TOC)
+    });
+    const chapters = await ext.parseChapterList(url, ctx);
+
+    expect(chapters.map((c) => c.title)).toEqual(['CHAPTER I.', 'CHAPTER II.']);
+    const content = await ext.parseChapterContent(chapters[0].url, ctx);
+    expect(content).toContain('First body paragraph');
+    expect(content).not.toContain('CONTENTS');
+  });
+
+  it('ignores prose lines that look like chapter marks', async () => {
+    const url = 'https://www.gutenberg.org/ebooks/555555';
+    const ctx = mockCtx({
+      'pg555555-images.html': ok(PG_ONLY_HTML),
+      'pg555555.txt': ok(TEXT_BOOK_FALSE_MARKS)
+    });
+    const chapters = await ext.parseChapterList(url, ctx);
+
+    expect(chapters.map((c) => c.title)).toEqual(['CHAPTER I.', 'CHAPTER II.']);
   });
 });
 

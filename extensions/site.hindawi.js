@@ -1,6 +1,6 @@
 // @id       site:hindawi
 // @name     مؤسسة هنداوي
-// @version  1.1.3
+// @version  1.1.4
 // @lang     ar
 // @apiVersion 1
 // @baseUrl  https://www.safahat.org
@@ -18,6 +18,7 @@ var _htmlCache = Object.create(null); // url -> { res, ts }
 var _HTML_CACHE_TTL_MS = 5 * 60 * 1000;
 var _HTML_CACHE_CAP = 12;
 var _inFlight = Object.create(null); // url -> Promise<res>
+var _SEARCH_PAGE_SIZE = 20;
 
 function _fetchCachedPage(url, ctx) {
   var now = Date.now();
@@ -54,7 +55,7 @@ registerExtension({
   id: 'site:hindawi',
   name: 'مؤسسة هنداوي',
   lang: 'ar',
-  version: '1.1.3',
+  version: '1.1.4',
   apiVersion: 1,
   baseUrl: 'https://www.safahat.org',
 
@@ -412,9 +413,18 @@ registerExtension({
     return paragraphs.map(function (p) { return p.text; }).join('\n\n');
   },
 
+  // Books are complete, static works: there is nothing newer to poll for.
+  fetchLatestChapters: async function (novelUrl, knownCount, ctx) {
+    return [];
+  },
+
   // ---------------------------------------------------------------
   // Search & Catalog
   // ---------------------------------------------------------------
+  _extractSearchResults: function (html) {
+    return this._extractBalancedInner(html, /<div[^>]*class="[^"]*searchResults[^"]*"[^>]*>/gi);
+  },
+
   _parseBookCards: function (html) {
     var results = [];
     var seen = Object.create(null);
@@ -447,7 +457,8 @@ registerExtension({
     if (results.length === 0) {
       var listRegex = /<li>[\s\S]*?<a[^>]+href=['"](\/books\/\d+\/)['"][^>]*>([\s\S]*?)<\/a>([\s\S]*?)<\/li>/gi;
       var lm;
-      while ((lm = listRegex.exec(html)) !== null) {
+      var listHtml = this._extractSearchResults(html) || html;
+      while ((lm = listRegex.exec(listHtml)) !== null) {
         var bookUrl = this._absUrl(lm[1].trim());
         if (seen[bookUrl]) continue;
         seen[bookUrl] = true;
@@ -483,15 +494,13 @@ registerExtension({
       return this.getPopularNovels(pageNum, ctx);
     }
 
-    // Direct search keyword endpoint
+    // The site returns the complete match set in one page (its /<n>/ suffix
+    // is ignored), so paginate locally instead of re-requesting the same list.
     var searchUrl = this._absUrl('/search/keyword/' + encodeURIComponent(q) + '/');
-    if (pageNum > 1) {
-      searchUrl += pageNum + '/';
-    }
-
     var res = await _fetchCachedPage(searchUrl, ctx);
     if (!res || !res.ok) return [];
-    return this._parseBookCards(res.text);
+    var start = (pageNum - 1) * _SEARCH_PAGE_SIZE;
+    return this._parseBookCards(res.text).slice(start, start + _SEARCH_PAGE_SIZE);
   },
 
   getPopularNovels: async function (page, ctx) {

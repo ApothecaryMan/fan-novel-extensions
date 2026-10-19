@@ -25,7 +25,8 @@ describe('Hindawi Extension metadata', () => {
       'searchNovels',
       'getPopularNovels',
       'getCategories',
-      'getCategoryNovels'
+      'getCategoryNovels',
+      'fetchLatestChapters'
     ];
     for (const m of required) {
       expect(typeof ext[m]).toBe('function');
@@ -121,11 +122,60 @@ describe('Hindawi Parsing logic with fixtures', () => {
     expect(results[0].status).toBe('مكتملة');
   });
 
+  it('scopes search results to the searchResults container', async () => {
+    const url = 'https://www.safahat.org/search/keyword/scope/';
+    const html = `<!DOCTYPE html><html><body>
+      <div class="searchResults">
+        <h2>نتائج البحث</h2>
+        <ul class="list">
+          <li><a href='/books/111/'>كتاب داخل النتائج</a> &middot; بقلم <a href='/contributors/1/'>مؤلف أول</a></li>
+        </ul>
+      </div>
+      <div class="mostRead">
+        <ul class="list">
+          <li><a href='/books/999/'>كتاب تلويث</a> &middot; بقلم <a href='/contributors/9/'>مؤلف آخر</a></li>
+        </ul>
+      </div>
+    </body></html>`;
+    const ctx = mockCtx({ [url]: ok(html) });
+
+    const results = await ext.searchNovels('scope', 1, ctx);
+
+    expect(results.map(r => r.url)).toEqual(['https://www.safahat.org/books/111/']);
+  });
+
+  it('paginates the complete search result set locally', async () => {
+    const url = 'https://www.safahat.org/search/keyword/paging/';
+    const items = Array.from({ length: 25 }, (_, i) =>
+      `<li><a href='/books/${1000 + i}/'>كتاب ${i + 1}</a> &middot; بقلم <a href='/contributors/${i}/'>مؤلف ${i + 1}</a></li>`
+    ).join('');
+    const html = `<div class="searchResults"><ul class="list">${items}</ul></div>`;
+    const ctx = mockCtx({ [url]: ok(html) });
+
+    const first = await ext.searchNovels('paging', 1, ctx);
+    const second = await ext.searchNovels('paging', 2, ctx);
+
+    expect(first).toHaveLength(20);
+    expect(second).toHaveLength(5);
+    expect(new Set([...first, ...second].map(r => r.url)).size).toBe(25);
+  });
+
   it('returns structured category topics', async () => {
     const categories = await ext.getCategories();
     expect(categories.length).toBeGreaterThan(10);
     const novelsCat = categories.find(c => c.slug === 'novels');
     expect(novelsCat).toBeDefined();
     expect(novelsCat.name).toBe('روايات');
+  });
+
+  it('returns no new chapters for static books without fetching', async () => {
+    const ctx = {
+      log: () => {},
+      xFetch: () => { throw new Error('should not fetch'); }
+    };
+
+    await expect(
+      ext.fetchLatestChapters('https://www.safahat.org/books/25868315/', 3, ctx)
+    ).resolves.toEqual([]);
   });
 });

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1792263486757,
+  "generatedAt": 1792434686591,
   "extensions": [
     {
       "id": "site:cenele",
@@ -18,10 +18,10 @@
       "id": "site:hindawi",
       "name": "مؤسسة هنداوي",
       "lang": "ar",
-      "version": "1.1.3",
+      "version": "1.1.4",
       "apiVersion": 1,
-      "size": 20168,
-      "sha256": "5f77a5e8391f12426535942b02626ed8ae0c69f7e79dd815696b153b4914fdc8",
+      "size": 20719,
+      "sha256": "2740e8b141644a0ea3b17c25806af5152c6119ae7dc75ff864d9a0dd85cb5e94",
       "url": "site.hindawi.js",
       "baseUrl": "https://www.safahat.org",
       "icon": "icons/hindawi.png"
@@ -97,5 +97,5 @@
       "icon": "icons/wuxiaworld.png"
     }
   ],
-  "signature": "CX2t11ay-HBmAJYTxZ9qbAy_2qfustPrkPxjH4p2XdJvF6ef_X9T5nlcTojWTg09AsiHWH4LdjMP1sN8iJw4BA"
+  "signature": "XfsqHmpfg8cNi84DSRZgME9eUVlqFN9KjbGyuzeQtlCxpfjDSOUDiRbe8kqLEeHaKeC69-5pKnLmfR-D2EDsDg"
 }

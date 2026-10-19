@@ -26,6 +26,7 @@ describe('Gutenberg extension metadata', () => {
       'getPopularNovels',
       'getCategories',
       'getCategoryNovels',
+      'getSortOptions',
       'fetchLatestChapters'
     ];
     for (const m of required) expect(typeof ext[m]).toBe('function');
@@ -56,6 +57,72 @@ describe('Gutenberg local catalog', () => {
     expect(cats.some((c) => c.slug === 'poetry')).toBe(true);
     const poetry = await ext.getCategoryNovels('poetry', 1, mockCtx());
     expect(poetry.some((r) => r.url.includes('/ebooks/1727'))).toBe(true);
+  });
+});
+
+describe('Gutenberg sort options', () => {
+  it('returns the six catalogue orderings with Arabic labels', async () => {
+    const opts = await ext.getSortOptions(mockCtx());
+    expect(opts).toHaveLength(6);
+    const bySlug = Object.fromEntries(opts.map((o) => [o.slug, o.name]));
+    expect(bySlug.popular).toBe('الأكثر شعبية');
+    expect(bySlug.title).toBe('A-Z');
+    expect(bySlug['title-desc']).toBe('Z-A');
+    expect(bySlug.author).toBe('المؤلف A-Z');
+    expect(bySlug.oldest).toBe('الأقدم');
+    expect(bySlug.newest).toBe('الأحدث');
+  });
+});
+
+describe('Gutenberg sorted browse', () => {
+  const sortTitle = (s) => String(s || '').toLowerCase()
+    .replace(/^[\s"'“”‘’\[\](){}.,;:!?—–\-$]+/, '')
+    .replace(/^(the|a|an)\s+/, '')
+    .replace(/^[\s"'“”‘’\[\](){}.,;:!?—–\-$]+/, '');
+  const titlesOf = (list) => list.map((r) => sortTitle(r.title));
+  const idsOf = (list) => list.map((r) => Number(r.url.match(/\/(\d+)$/)[1]));
+
+  it('sorts the whole catalog by title before paginating', async () => {
+    const page1 = await ext.getPopularNovels(1, 'title', mockCtx());
+    const page2 = await ext.getPopularNovels(2, 'title', mockCtx());
+    expect(page1).toHaveLength(20);
+    const titles = titlesOf(page1);
+    expect(page1[0].title.charAt(0)).not.toBe('"');
+    expect(titles).toEqual(titles.slice().sort());
+    expect(titles[titles.length - 1] <= titlesOf(page2)[0]).toBe(true);
+  });
+
+  it('sorts title-desc', async () => {
+    const page1 = await ext.getPopularNovels(1, 'title-desc', mockCtx());
+    const titles = titlesOf(page1);
+    expect(titles).toEqual(titles.slice().sort().reverse());
+  });
+
+  it('sorts by Gutenberg id', async () => {
+    const oldest = await ext.getPopularNovels(1, 'oldest', mockCtx());
+    const newest = await ext.getPopularNovels(1, 'newest', mockCtx());
+    expect(idsOf(oldest)).toEqual(idsOf(oldest).slice().sort((a, b) => a - b));
+    expect(idsOf(newest)).toEqual(idsOf(newest).slice().sort((a, b) => b - a));
+  });
+
+  it('keeps the default popular order when no sort is given', async () => {
+    const def = await ext.getPopularNovels(1, mockCtx());
+    const popular = await ext.getPopularNovels(1, 'popular', mockCtx());
+    const unknown = await ext.getPopularNovels(1, 'nope', mockCtx());
+    expect(def.map((r) => r.url)).toEqual(popular.map((r) => r.url));
+    expect(def.map((r) => r.url)).toEqual(unknown.map((r) => r.url));
+  });
+
+  it('sorts category results and keeps the old signature', async () => {
+    const sorted = await ext.getCategoryNovels('poetry', 1, 'title', mockCtx());
+    const titles = titlesOf(sorted);
+    expect(sorted.length).toBeGreaterThan(0);
+    expect(titles).toEqual(titles.slice().sort());
+    expect(sorted.every((r) => r.title && r.title.charAt(0) !== '"')).toBe(true);
+
+    const legacy = await ext.getCategoryNovels('poetry', 1, mockCtx());
+    const explicit = await ext.getCategoryNovels('poetry', 1, 'popular', mockCtx());
+    expect(legacy.map((r) => r.url)).toEqual(explicit.map((r) => r.url));
   });
 });
 

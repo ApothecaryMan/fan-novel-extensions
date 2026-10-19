@@ -55,8 +55,18 @@ var CHAPTER_MARK_RE = /^[ \t]*((?:chapter|book|part|section)\s+(?:the\s+)?(?:[iv
 
 var CATALOG_INDEX = null;
 var SEARCH_INDEX = null;
+var SORT_CACHE = Object.create(null);
 var BOOK_CACHE = Object.create(null);
 var IN_FLIGHT = Object.create(null);
+
+var VALID_SORTS = {
+  popular: true,
+  title: true,
+  'title-desc': true,
+  author: true,
+  oldest: true,
+  newest: true
+};
 
 var NAMED_ENTITIES = {
   amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
@@ -227,6 +237,58 @@ function toSummary(entry) {
     tags: labels,
     status: 'مكتملة'
   };
+}
+
+function entryFromRow(row, order) {
+  return {
+    id: String(row[0]),
+    title: row[1],
+    author: row[2] || '',
+    tags: row[3] || [],
+    order: order
+  };
+}
+
+function sortKey(order) {
+  return order && VALID_SORTS[order] ? order : 'popular';
+}
+
+function compareText(a, b) {
+  var x = String(a || '').toLowerCase();
+  var y = String(b || '').toLowerCase();
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+
+function sortTitle(title) {
+  var s = String(title || '').toLowerCase();
+  s = s.replace(/^[\s"'“”‘’\[\](){}.,;:!?—–\-$]+/, '');
+  s = s.replace(/^(the|a|an)\s+/, '');
+  s = s.replace(/^[\s"'“”‘’\[\](){}.,;:!?—–\-$]+/, '');
+  return s;
+}
+
+function sortedRows(order) {
+  var key = sortKey(order);
+  if (SORT_CACHE[key]) return SORT_CACHE[key];
+  var rows = [];
+  for (var i = 0; i < CATALOG.length; i++) rows.push({ row: CATALOG[i], order: i });
+  if (key === 'title') {
+    rows.sort(function (a, b) { return compareText(sortTitle(a.row[1]), sortTitle(b.row[1])) || a.order - b.order; });
+  } else if (key === 'title-desc') {
+    rows.sort(function (a, b) { return compareText(sortTitle(b.row[1]), sortTitle(a.row[1])) || a.order - b.order; });
+  } else if (key === 'author') {
+    rows.sort(function (a, b) {
+      var aa = a.row[2] || '\uffff';
+      var bb = b.row[2] || '\uffff';
+      return compareText(aa, bb) || compareText(a.row[1], b.row[1]) || a.order - b.order;
+    });
+  } else if (key === 'oldest') {
+    rows.sort(function (a, b) { return Number(a.row[0]) - Number(b.row[0]); });
+  } else if (key === 'newest') {
+    rows.sort(function (a, b) { return Number(b.row[0]) - Number(a.row[0]); });
+  }
+  SORT_CACHE[key] = rows;
+  return rows;
 }
 
 function tagsFromText(text) {
@@ -761,21 +823,28 @@ registerExtension({
     return out;
   },
 
-  getPopularNovels: async function (page, ctx) {
+  getPopularNovels: async function (page, sort, ctx) {
+    if (sort && typeof sort.xFetch === 'function') { ctx = sort; sort = ''; }
+    var order = sortKey(typeof sort === 'string' ? sort : '');
+    var rows = sortedRows(order);
     var pageNum = pageNumber(page);
     var start = (pageNum - 1) * PAGE_SIZE;
     var out = [];
-    for (var i = start; i < CATALOG.length && i < start + PAGE_SIZE; i++) {
-      var row = CATALOG[i];
-      out.push(toSummary({
-        id: String(row[0]),
-        title: row[1],
-        author: row[2] || '',
-        tags: row[3] || [],
-        order: i
-      }));
+    for (var i = start; i < rows.length && i < start + PAGE_SIZE; i++) {
+      out.push(toSummary(entryFromRow(rows[i].row, rows[i].order)));
     }
     return out;
+  },
+
+  getSortOptions: async function () {
+    return [
+      { name: 'الأكثر شعبية', slug: 'popular' },
+      { name: 'A-Z', slug: 'title' },
+      { name: 'Z-A', slug: 'title-desc' },
+      { name: 'المؤلف A-Z', slug: 'author' },
+      { name: 'الأقدم', slug: 'oldest' },
+      { name: 'الأحدث', slug: 'newest' }
+    ];
   },
 
   getCategories: async function () {
@@ -796,16 +865,19 @@ registerExtension({
     ];
   },
 
-  getCategoryNovels: async function (categorySlug, page, ctx) {
+  getCategoryNovels: async function (categorySlug, page, sort, ctx) {
+    if (sort && typeof sort.xFetch === 'function') { ctx = sort; sort = ''; }
     var slug = String(categorySlug || '').trim();
-    if (!slug || slug === 'all') return this.getPopularNovels(page, ctx);
+    if (!slug || slug === 'all') return this.getPopularNovels(page, sort, ctx);
 
+    var order = sortKey(typeof sort === 'string' ? sort : '');
+    var rows = sortedRows(order);
     var pageNum = pageNumber(page);
     var start = (pageNum - 1) * PAGE_SIZE;
     var seen = 0;
     var out = [];
-    for (var i = 0; i < CATALOG.length; i++) {
-      var row = CATALOG[i];
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i].row;
       var tags = row[3] || [];
       var has = false;
       for (var t = 0; t < tags.length; t++) {
@@ -816,13 +888,7 @@ registerExtension({
       }
       if (!has) continue;
       if (seen >= start && seen < start + PAGE_SIZE) {
-        out.push(toSummary({
-          id: String(row[0]),
-          title: row[1],
-          author: row[2] || '',
-          tags: tags,
-          order: i
-        }));
+        out.push(toSummary(entryFromRow(row, rows[i].order)));
       }
       seen++;
     }

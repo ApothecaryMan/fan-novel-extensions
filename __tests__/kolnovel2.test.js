@@ -29,6 +29,33 @@ describe('V2 search', () => {
     const ctx = mockCtx({ '?s=': ok(NO_RESULTS_V2) });
     expect(await ext.searchNovels('zzz', 1, ctx)).toEqual([]);
   });
+  it('browse page 2 uses ?paged=2 on /series/', async () => {
+    let fetched = '';
+    const ctx = { xFetch: async (u) => { fetched = String(typeof u === 'string' ? u : u.url); return ok(HOME_V2); } };
+    await ext.searchNovels('', 2, ctx);
+    expect(fetched).toContain('/series/');
+    expect(fetched).toContain('paged=2');
+  });
+  it('genre page 2 uses ?paged=2', async () => {
+    let fetched = '';
+    const ctx = { xFetch: async (u) => { fetched = String(typeof u === 'string' ? u : u.url); return ok(GENRE_V2); } };
+    await ext.getCategoryNovels('action', 2, ctx);
+    expect(fetched).toContain('paged=2');
+    expect(fetched).not.toContain('page/2/');
+  });
+  it('archive tags exclude separators', async () => {
+    const ctx = mockCtx({ '/genre/action/': ok(GENRE_V2) });
+    const r = await ext.getCategoryNovels('action', 1, ctx);
+    expect(r[0].tags).not.toContain('·');
+  });
+  it('pairs separate hero title-source and cover-link anchors', async () => {
+    const live = '<div><a class="tw:block" href="https://kolnovel.com/series/hero-novel/" data-kol-series-cover-link><span class="kol-ui-cover"><img src="https://kolnovel.com/wp-content/uploads/hero.jpg"/></span></a>'
+      + '<h1 data-kol-series-title-source data-kol-series-title-url="https://kolnovel.com/series/hero-novel/">رواية البطل</h1></div>';
+    const r = ext._parseHomeCards(live);
+    expect(r.length).toBe(1);
+    expect(r[0].title).toBe('رواية البطل');
+    expect(r[0].coverUrl).toContain('hero.jpg');
+  });
   it('browse homepage finds novels', async () => {
     const ctx = mockCtx({ 'kolnovel.com/': ok(HOME_V2) });
     expect((await ext.searchNovels('', 1, ctx)).length).toBeGreaterThan(0);

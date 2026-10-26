@@ -749,7 +749,9 @@ registerExtension({
       if (genBlock) {
         var gm, gre = /<span[^>]*>([^<]+)<\/span>|<a[^>]*>([^<]+)<\/a>/gi;
         while ((gm = gre.exec(genBlock[1])) !== null) {
-          var g = self._decodeEntities((gm[1] || gm[2] || '').replace(/^#\s*/, '').trim());
+          var g = self._decodeEntities((gm[1] || gm[2] || '').trim());
+          if (!g || g === '·' || g === '•' || g === '|' || g === ',') continue;
+          g = g.replace(/^#\s*/, '').trim();
           if (g && tags.indexOf(g) === -1) tags.push(g);
         }
       }
@@ -769,34 +771,30 @@ registerExtension({
 
   _parseHomeCards: function (html) {
     var self = this, results = [], seen = {};
-    var push = function (url, title, cover) {
-      if (!url || seen[url]) return;
-      seen[url] = true;
-      results.push({ source: self.id, url: url, title: self._cleanNovelTitle(title || '', ''), coverUrl: cover ? self._cover(cover) : undefined, author: 'غير معروف', category: 'روايات مترجمة', status: 'مستمرة' });
-    };
-    var re = /<a[^>]+href="([^"]+\/series\/[^"]+)"[^>]*data-kol-series-(?:title-source|cover-link)[^>]*>/gi;
+    var covers = {}, titles = {};
+    // Pass 1: cover-link anchors carry the <img> inside.
+    var reC = /<a[^>]+href="([^"]+\/series\/[^"]+)"[^>]*data-kol-series-cover-link[^>]*>([\s\S]*?)<\/a>/gi;
     var m;
-    // First pass: title-source anchors carry the real title.
-    while ((m = re.exec(html)) !== null) {
-      var tag = m[0], url = m[1].trim();
-      var tm = tag.match(/data-kol-series-title-source[^>]*>([^<]+)</i);
-      var title = tm ? tm[1] : '';
-      if (!title) {
-        var after = html.slice(m.index, m.index + 600);
-        var hm = after.match(/data-kol-series-title-source[^>]*>([^<]+)</i);
-        if (hm) title = hm[1];
-      }
-      var block = html.slice(Math.max(0, m.index - 800), m.index + 800);
-      var cm = block.match(/<img[^>]+src="([^">]+)"/i);
-      // Only keep anchors that resolve a title nearby; cover-only dupes merge via seen.
-      if (title) push(url, title, cm ? cm[1] : undefined);
+    while ((m = reC.exec(html)) !== null) {
+      var url = m[1].trim();
+      var img = m[2].match(/<img[^>]+src="([^">]+)"/i);
+      if (img && !covers[url]) covers[url] = img[1];
     }
-    if (results.length > 0) return results;
-    // Fallback: any /series/ link with nearby img.
-    var re2 = /<a[^>]+href="([^"]+\/series\/[^"]+)"[^>]*>([\s\S]{0,400}?)(?:data-kol-series-title-source|title="([^"]+)")/gi;
-    while ((m = re2.exec(html)) !== null) {
-      push(m[1].trim(), m[3] || '', null);
-      if (results.length >= 20) break;
+    // Pass 2: title-source is any tag; anchors use href, others use data-kol-series-title-url.
+    var reT = /<(\w+)[^>]*data-kol-series-title-source[^>]*>([^<]*)/gi;
+    while ((m = reT.exec(html)) !== null) {
+      var tag = m[0], title = self._decodeEntities(self._stripTags(m[2]).trim());
+      var tu = tag.match(/data-kol-series-title-url="([^"]+)"/i) || tag.match(/href="([^"]+\/series\/[^"]+)"/i);
+      if (tu && title && !titles[tu[1].trim()]) titles[tu[1].trim()] = title;
+    }
+    var urls = {};
+    var k;
+    for (k in covers) urls[k] = true;
+    for (k in titles) urls[k] = true;
+    for (k in urls) {
+      if (seen[k]) continue;
+      seen[k] = true;
+      results.push({ source: self.id, url: k, title: self._cleanNovelTitle(titles[k] || k.split('/').filter(Boolean).pop() || '', ''), coverUrl: covers[k] ? self._cover(covers[k]) : undefined, author: 'غير معروف', category: 'روايات مترجمة', status: 'مستمرة' });
     }
     return results;
   },
@@ -806,7 +804,9 @@ registerExtension({
     var pageNum = (page && page > 1) ? Math.floor(page) : 1;
     var url;
     if (isBrowse) {
-      url = this._absUrl(pageNum > 1 ? '/page/' + pageNum + '/' : '/');
+      // Starless homepage has no pagination (/page/N/ returns the same HTML);
+      // default browse goes through the /series/ archive (14 pages, ?paged=N).
+      url = this._absUrl('/series/' + (pageNum > 1 ? '?paged=' + pageNum : ''));
     } else {
       url = this._absUrl('/?s=' + encodeURIComponent(query.trim()) + (pageNum > 1 ? '&paged=' + pageNum : ''));
     }
@@ -835,7 +835,7 @@ registerExtension({
     var order = (typeof sort === 'string' && sort) ? sort : '';
     if (!order) return this.searchNovels('', page, ctx);
     var pageNum = (page && page > 1) ? Math.floor(page) : 1;
-    var url = this._absUrl('/series/?order=' + encodeURIComponent(order) + (pageNum > 1 ? '&page=' + pageNum : ''));
+    var url = this._absUrl('/series/?order=' + encodeURIComponent(order) + (pageNum > 1 ? '&paged=' + pageNum : ''));
     var res = await this._safeFetch(url, ctx, 'فشل جلب التصفح المرتب');
     if (!res.ok) return [];
     return this._parseArchiveCards(res.text);
@@ -898,10 +898,10 @@ registerExtension({
     var pageNum = (page && page > 1) ? Math.floor(page) : 1;
     var url;
     if (order) {
-      url = this._absUrl('/series/?genre%5B%5D=' + encodeURIComponent(slug) + '&order=' + encodeURIComponent(order) + (pageNum > 1 ? '&page=' + pageNum : ''));
+      url = this._absUrl('/series/?genre%5B%5D=' + encodeURIComponent(slug) + '&order=' + encodeURIComponent(order) + (pageNum > 1 ? '&paged=' + pageNum : ''));
     } else {
       url = this._absUrl('/genre/' + encodeURIComponent(slug) + '/');
-      if (pageNum > 1) url += 'page/' + pageNum + '/';
+      if (pageNum > 1) url += '?paged=' + pageNum;
     }
     var res = await this._safeFetch(url, ctx, 'فشل جلب صفحة التصنيف');
     if (!res.ok) return [];

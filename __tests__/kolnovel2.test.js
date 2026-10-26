@@ -8,7 +8,7 @@ beforeAll(() => { ext = loadExtension('site.kolnovel2.js'); });
 describe('V2 metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:kolnovel-v2'));
   it('has correct name', () => expect(ext.name).toBe('كول نوفيل'));
-  it('has version 2.0.1', () => expect(ext.version).toBe('2.0.1'));
+  it('has version 2.0.2', () => expect(ext.version).toBe('2.0.2'));
   it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('exposes 13 methods', () => {
     for (const m of ['parseNovelInfo','parseChapterList','fetchLatestChapters','parseChapterContent','searchNovels','getPopularNovels','getCategories','getCategoryNovels','getSortOptions','getComments','getCommentCount','postComment','voteComment']) expect(typeof ext[m]).toBe('function');
@@ -79,6 +79,16 @@ describe('V2 novel', () => {
     expect(info.title).toBe('في عالم أخر مع نظام ناروتو');
     expect(info.coverUrl).toContain('In-Different-World');
     expect(info.tags).toContain('أكشن');
+  });
+  it('reports totalChapters from volume counts (count-probe)', async () => {
+    const info = await ext.parseNovelInfo('https://kolnovel.com/series/x/', mockCtx({ '/series/x/': ok(NOVEL_V2) }));
+    expect(info.totalChapters).toBe(3);
+  });
+  it('follows volume pager pages for missing chapters', async () => {
+    const vol = `<ul><li class="kol-series-chapter"><a href="https://kolnovel.com/ch4" data-kol-series-chapter-link><span data-kol-series-chapter-number="4">فصل 4</span><span data-kol-series-chapter-title>الرابع</span></a></li></ul>`;
+    const ctx = mockCtx({ 'chapter_page=2': ok(vol), '/series/x/': ok(NOVEL_V2) });
+    const ch = await ext.parseChapterList('https://kolnovel.com/series/x/', ctx);
+    expect(ch.map(c => c.number).sort((a, b) => a - b)).toEqual([1, 2, 3, 4]);
   });
   it('chapters from kol-series-chapter rows', async () => {
     const ch = await ext.parseChapterList('https://kolnovel.com/series/x/', mockCtx({ '/series/x/': ok(NOVEL_V2) }));

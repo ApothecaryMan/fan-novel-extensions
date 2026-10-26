@@ -37,6 +37,7 @@ export const NOVEL_V2 = `<!DOCTYPE html><html dir="rtl" lang="ar"><head><title>�
 <div class="kol-series-editorial__prose entry-content" itemprop="description"><p>في قارة الرياح الإلهية وصف طويل للرواية.</p></div>
 <div data-kol-chapter-index data-kol-series-id="97201">
 <details class="kol-series-editorial__volume" data-kol-chapter-volume="الفصول" data-kol-volume-page="0" data-kol-volume-pages="1">
+<summary><span class="kol-series-editorial__volume-title">الفصول</span><span class="kol-series-editorial__volume-count" dir="ltr">3 فصل</span></summary>
 <ul data-kol-chapter-volume-content>
 <li class="kol-series-chapter" data-kol-chapter-row data-ID="97205"><a class="kol-ui-link kol-series-chapter__link" href="https://kolnovel.com/shaag24in-different-world-with-naruto-systemz435ggye-97205/" data-kol-chapter-transition-link data-kol-chapter-id="97205"><span class="kol-series-chapter__number" data-kol-chapter-number="1"><span>فصل 1</span></span><span class="kol-series-chapter__title"><span class="kol-series-chapter__title-copy" data-kol-chapter-title>ولادة جديدة فى عالم مختلف</span></span><time class="kol-series-chapter__date" datetime="2021-03-13T10:00:00+02:00">13/03/2021</time></a></li>
 <li class="kol-series-chapter" data-kol-chapter-row data-ID="97206"><a href="https://kolnovel.com/shaag24ch2/" data-kol-chapter-transition-link data-kol-chapter-id="97206"><span data-kol-chapter-number="2">فصل 2</span><span data-kol-chapter-title>البداية الحقيقية</span><time datetime="2021-03-14T10:00:00+02:00">14/03/2021</time></a></li>

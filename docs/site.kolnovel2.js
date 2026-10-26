@@ -5,7 +5,7 @@ registerExtension({
   id: 'site:kolnovel-v2',
   name: 'كول نوفيل',
   lang: 'ar',
-  version: '2.0.1',
+  version: '2.0.2',
   apiVersion: 2,
   baseUrl: 'https://kolnovel.com',
 
@@ -357,6 +357,16 @@ registerExtension({
       rating = rateNum;
     }
 
+    // Total chapters for the app's Tier-1 count-probe: sum the per-volume
+    // counters ("7 فصل", "196 فصل"). Without this the app always pays a full
+    // pager crawl on every open instead of a 1-request metadata check.
+    var totalChapters;
+    var totalSum = 0;
+    var tcRe = /class="[^"]*kol-series-editorial__volume-count[^"]*"[^>]*>\s*(\d+)\s*فصل/gi;
+    var tcM;
+    while ((tcM = tcRe.exec(html)) !== null) totalSum += parseInt(tcM[1], 10);
+    if (totalSum > 0) totalChapters = totalSum;
+
     return {
       source: this.id,
       url: fullUrl,
@@ -367,7 +377,8 @@ registerExtension({
       status: status,
       category: genres.length > 0 ? genres[0] : undefined,
       tags: genres.length > 0 ? genres : undefined,
-      rating: rating
+      rating: rating,
+      totalChapters: totalChapters
     };
   },
 
@@ -439,17 +450,23 @@ registerExtension({
     // Static novel page ships empty <ul data-kol-chapter-volume-content> until paged.
     var seen = {};
     all.forEach(function (c) { seen[c.url] = true; });
+    // Volume pages are static GETs: fetch them IN PARALLEL (the old sequential
+    // loop held 'جاري تحميل تفاصيل الرواية' for 6 round-trips on mobile).
     var pages = this._volumePages(html);
-    for (var i = 0; i < pages.length; i++) {
-      try {
-        var pageUrl = pages[i].charAt(0) === '/' ? this._absUrl(pages[i]) : (pages[i].indexOf('http') === 0 ? pages[i] : this._absUrl('/' + pages[i].replace(/^\//, '')));
-        var res = await this._safeFetch(pageUrl, ctx, 'فشل جلب صفحة الفصول');
-        if (!res.ok) continue;
-        var rows = this._fetchInlineChapters(res.text || '');
-        for (var j = 0; j < rows.length; j++) {
-          if (!seen[rows[j].url]) { seen[rows[j].url] = true; all.push(rows[j]); }
-        }
-      } catch (e) { /* one bad volume page must not kill the list */ }
+    var self = this;
+    var jobs = pages.map(function (p) {
+      var pageUrl = p.charAt(0) === '/' ? self._absUrl(p) : (p.indexOf('http') === 0 ? p : self._absUrl('/' + p.replace(/^\//, '')));
+      return self._safeFetch(pageUrl, ctx, 'فشل جلب صفحة الفصول').then(function (res) {
+        if (!res.ok) return [];
+        return self._fetchInlineChapters(res.text || '');
+      }).catch(function () { return []; });
+    });
+    var batches = await Promise.all(jobs);
+    for (var b = 0; b < batches.length; b++) {
+      var rows = batches[b];
+      for (var j = 0; j < rows.length; j++) {
+        if (!seen[rows[j].url]) { seen[rows[j].url] = true; all.push(rows[j]); }
+      }
       if (all.length > 2000) break;
     }
     // Fallback: start/latest shortcuts carry first+last when list is JS-gated.

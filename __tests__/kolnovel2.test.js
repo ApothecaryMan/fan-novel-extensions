@@ -8,7 +8,7 @@ beforeAll(() => { ext = loadExtension('site.kolnovel2.js'); });
 describe('V2 metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:kolnovel-v2'));
   it('has correct name', () => expect(ext.name).toBe('كول نوفيل'));
-  it('has version 2.1.0', () => expect(ext.version).toBe('2.1.0'));
+  it('has version 2.0.1', () => expect(ext.version).toBe('2.0.1'));
   it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('exposes 13 methods', () => {
     for (const m of ['parseNovelInfo','parseChapterList','fetchLatestChapters','parseChapterContent','searchNovels','getPopularNovels','getCategories','getCategoryNovels','getSortOptions','getComments','getCommentCount','postComment','voteComment']) expect(typeof ext[m]).toBe('function');

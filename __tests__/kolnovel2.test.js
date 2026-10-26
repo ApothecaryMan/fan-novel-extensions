@@ -8,7 +8,7 @@ beforeAll(() => { ext = loadExtension('site.kolnovel2.js'); });
 describe('V2 metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:kolnovel-v2'));
   it('has correct name', () => expect(ext.name).toBe('كول نوفيل'));
-  it('has version 2.0.2', () => expect(ext.version).toBe('2.0.2'));
+  it('has version 2.0.3', () => expect(ext.version).toBe('2.0.3'));
   it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('exposes 13 methods', () => {
     for (const m of ['parseNovelInfo','parseChapterList','fetchLatestChapters','parseChapterContent','searchNovels','getPopularNovels','getCategories','getCategoryNovels','getSortOptions','getComments','getCommentCount','postComment','voteComment']) expect(typeof ext[m]).toBe('function');
@@ -79,6 +79,14 @@ describe('V2 novel', () => {
     expect(info.title).toBe('في عالم أخر مع نظام ناروتو');
     expect(info.coverUrl).toContain('In-Different-World');
     expect(info.tags).toContain('أكشن');
+  });
+  it('keeps real covers named بدون-اسم, rejects only the site logo', async () => {
+    const real = `<html><body><h1 class="kol-series-editorial__title">ك</h1><div class="kol-ui-cover kol-series-editorial__cover"><img src="https://kolnovel.com/wp-content/uploads/2021/01/بدون-اسم52_20260530141421-767x1024.png"/></div></body></html>`;
+    const info = await ext.parseNovelInfo('https://kolnovel.com/series/k/', mockCtx({ '/series/k/': ok(real) }));
+    expect(info.coverUrl).toContain('بدون-اسم52');
+    const logo = `<html><body><h1 class="kol-series-editorial__title">ك</h1><div class="kol-ui-cover kol-series-editorial__cover"><img src="https://kolnovel.com/wp-content/uploads/2026/10/بدون-اسم96_20261021214604.png"/></div></body></html>`;
+    const info2 = await ext.parseNovelInfo('https://kolnovel.com/series/l/', mockCtx({ '/series/l/': ok(logo) }));
+    expect(info2.coverUrl).toBeUndefined();
   });
   it('reports totalChapters from volume counts (count-probe)', async () => {
     const info = await ext.parseNovelInfo('https://kolnovel.com/series/x/', mockCtx({ '/series/x/': ok(NOVEL_V2) }));

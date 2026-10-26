@@ -5,7 +5,7 @@ registerExtension({
   id: 'site:kolnovel-v2',
   name: 'كول نوفيل',
   lang: 'ar',
-  version: '2.0.2',
+  version: '2.0.3',
   apiVersion: 2,
   baseUrl: 'https://kolnovel.com',
 
@@ -289,12 +289,18 @@ registerExtension({
     }
     var title = this._cleanNovelTitle(titleRaw, 'رواية');
 
-    // Cover: starless editorial cover first; og:image on novel pages is the site logo so ignore logos.
+    // Cover: starless editorial cover first. og:image on novel pages is always
+    // the site logo, so it is only a last resort. Real novel covers are often
+    // literally named "بدون اسم" by uploaders, so only the exact site-logo
+    // file (بدون-اسم96_20261021214604) counts as "no cover" — never the phrase.
+    var isLogo = function (u) {
+      return /بدون-اسم96_20261021214604|cropped-|32x32|180x180/.test(u || '');
+    };
     var coverMatch = html.match(/<div[^>]*class="[^"]*kol-series-editorial__cover[^"]*"[^>]*>[\s\S]*?<img[^>]+src="([^">]+)"/i);
-    if (coverMatch && /بدون-اسم|cropped-|32x32|180x180|2026\/10/.test(coverMatch[1])) coverMatch = null;
+    if (coverMatch && isLogo(coverMatch[1])) coverMatch = null;
     if (!coverMatch) {
       var og = html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i);
-      if (og && !/بدون-اسم|cropped-|32x32|180x180/.test(og[1])) coverMatch = og;
+      if (og && !isLogo(og[1])) coverMatch = og;
       else coverMatch = null;
     }
     var coverUrl = coverMatch ? this._cover(coverMatch[1]) : undefined;

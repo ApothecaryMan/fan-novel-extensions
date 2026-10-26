@@ -5,7 +5,7 @@ registerExtension({
   id: 'site:kolnovel-v2',
   name: 'كول نوفيل',
   lang: 'ar',
-  version: '2.0.0',
+  version: '2.1.0',
   apiVersion: 2,
   baseUrl: 'https://kolnovel.com',
 

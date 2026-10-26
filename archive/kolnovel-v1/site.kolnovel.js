@@ -1,9 +1,8 @@
-// site:kolnovel — remote-JS extension for ملوك الروايات (kolnovel.com)
-// Clean sandboxed scraper adhering to the Extension Runtime Specification (ctx.xFetch).
-// Chapter lists are inline on the novel page (no AJAX pagination needed).
+// site:kolnovel — ARCHIVED pre-starless version, kept frozen. See archive/README.md.
+// (Original: clean sandboxed scraper; chapter lists were inline, no AJAX pagination.)
 registerExtension({
   id: 'site:kolnovel',
-  name: 'كول نوفيل',
+  name: 'كول نوفيل اولد',
   lang: 'ar',
   version: '1.10.0',
   apiVersion: 2,

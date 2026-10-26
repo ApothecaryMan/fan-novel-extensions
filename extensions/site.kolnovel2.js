@@ -3,7 +3,7 @@
 // Chapter rows are paged via ?chapter_volume & chapter_page (followed sequentially, cap 5).
 registerExtension({
   id: 'site:kolnovel-v2',
-  name: 'كول نوفيل V2',
+  name: 'كول نوفيل',
   lang: 'ar',
   version: '2.0.0',
   apiVersion: 2,

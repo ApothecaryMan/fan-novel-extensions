@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1793041019621,
+  "generatedAt": 1793041835167,
   "extensions": [
     {
       "id": "site:cenele",
@@ -38,25 +38,13 @@
       "icon": "icons/hindawi.png"
     },
     {
-      "id": "site:kolnovel",
-      "name": "كول نوفيل",
-      "lang": "ar",
-      "version": "1.10.0",
-      "apiVersion": 2,
-      "size": 61602,
-      "sha256": "5b76f69be850ff994b3822e4fd2441bf9f2cea238ecba808c16f696d89203a2c",
-      "url": "site.kolnovel.js",
-      "baseUrl": "https://kolnovel.com",
-      "icon": "icons/kolnovel.png"
-    },
-    {
       "id": "site:kolnovel-v2",
-      "name": "كول نوفيل V2",
+      "name": "كول نوفيل",
       "lang": "ar",
       "version": "2.0.0",
       "apiVersion": 2,
-      "size": 62564,
-      "sha256": "a6a822b801da9a8ec4a1045d2addd951e5dbdabbe3c14a29ebeec284178f2db9",
+      "size": 62561,
+      "sha256": "8e3708dd6c940c8324eb7e0fca21bcfd2becce3688dba8b6b6c26f72f7fa8581",
       "url": "site.kolnovel2.js",
       "baseUrl": "https://kolnovel.com",
       "icon": "icons/kolnovel-v2.png"
@@ -120,5 +108,5 @@
       "icon": "icons/wuxiaworld.png"
     }
   ],
-  "signature": "2_gSLCFI6G4g4kbReoe0DlWJQRVSsHErDB1Z_TmlqwN0kgJP0eQZXcSe1XHdawUoCR9OPhUUmZUG1GlMtGmXCg"
+  "signature": "HMwXybYqbMoyd_rN7y8Brfn9dLjKsT9WGBPQpzu5NXMGfRjC3PwmgszGcjWXcyy1_A3vG5tUepx2BwQMoyriBg"
 }

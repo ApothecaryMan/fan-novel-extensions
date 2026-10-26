@@ -45,9 +45,9 @@ describe("cheap dirty-check contract", () => {
   });
 
   it("kolnovel clean returns [] after one inline parse", async () => {
-    const ext = loadExtension("site.kolnovel.js");
-    const html = `<ul><li data-ID="1"><a href="/series/x/1/">x</a><div class="epl-num">الفصل 1</div><div class="epl-title">أ</div></li>
-<li data-ID="2"><a href="/series/x/2/">x</a><div class="epl-num">الفصل 2</div><div class="epl-title">ب</div></li></ul>`;
+    const ext = loadExtension("site.kolnovel2.js");
+    const html = `<ul><li class="kol-series-chapter"><a href="/series/x/1/" data-kol-series-chapter-link><span data-kol-series-chapter-number="1">فصل 1</span><span data-kol-series-chapter-title>أ</span></a></li>
+<li class="kol-series-chapter"><a href="/series/x/2/" data-kol-series-chapter-link><span data-kol-series-chapter-number="2">فصل 2</span><span data-kol-series-chapter-title>ب</span></a></li></ul>`;
     const ctx = mockCtx({ "/series/x/": ok(html) });
     const res = await ext.fetchLatestChapters("https://kolnovel.com/series/x/", 2, ctx);
     expect(res).toEqual([]);

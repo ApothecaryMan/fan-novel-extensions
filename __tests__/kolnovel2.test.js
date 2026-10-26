@@ -7,7 +7,7 @@ beforeAll(() => { ext = loadExtension('site.kolnovel2.js'); });
 
 describe('V2 metadata', () => {
   it('has correct id', () => expect(ext.id).toBe('site:kolnovel-v2'));
-  it('has correct name', () => expect(ext.name).toBe('كول نوفيل V2'));
+  it('has correct name', () => expect(ext.name).toBe('كول نوفيل'));
   it('has version 2.0.0', () => expect(ext.version).toBe('2.0.0'));
   it('has apiVersion 2', () => expect(ext.apiVersion).toBe(2));
   it('exposes 13 methods', () => {

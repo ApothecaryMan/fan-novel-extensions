@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1793118412560,
+  "generatedAt": 1793119188062,
   "extensions": [
     {
       "id": "site:cenele",
@@ -87,10 +87,10 @@
       "id": "site:truthnovelbeta",
       "name": "Truth Novel Beta",
       "lang": "ar",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "apiVersion": 2,
-      "size": 31093,
-      "sha256": "f20be3dc37507edd806ab0ed5b191cb819b969160710e6b2563716a6318f52d6",
+      "size": 158333,
+      "sha256": "6e1d0438a62f8017be274a1a6b85e3f16ef32325fab7bf05b88c1817518f5602",
       "url": "site.truthnovelbeta.js",
       "baseUrl": "https://truthnovel.top"
     },
@@ -119,5 +119,5 @@
       "icon": "icons/wuxiaworld.png"
     }
   ],
-  "signature": "S6GgnwApNyEasbRlMWdoOBn7A3aBaqZwJ3Z30AS1yphxZXd8ZT9a6g_Al0xaINlh4cx0URDSbGY10fYgv_gMCA"
+  "signature": "RfYR-r4KR95q4SaNPuL9Dk0g9G2oWmEGGmX4TP9kk0lRGJadrTa66p1OD85gBABS8CoDex1VE4Smc87xCYY6Aw"
 }

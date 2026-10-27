@@ -68,7 +68,7 @@ describe("site:truthnovelbeta (Nexus live + Wayback fallback)", () => {
     expect(ext.id).toBe("site:truthnovelbeta");
     expect(ext.name).toContain("Beta");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.0.0");
+    expect(ext.version).toBe("1.1.0");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
     const old = loadExtension("site.truthnovel.js");
@@ -87,19 +87,26 @@ describe("site:truthnovelbeta (Nexus live + Wayback fallback)", () => {
     expect(info.readersCount).toBe("367");
   });
 
-  it("merges the live chapter with archived chapters from CDX", async () => {
-    const ctx = mockCtx({
-      [NOVEL_URL]: ok(NOVEL_PAGE),
-      "web.archive.org/cdx": ok(CDX_JSON)
-    });
-    const chapters = await ext.parseChapterList(NOVEL_URL, ctx);
-    expect(chapters.map((c) => c.number)).toEqual([1, 2, 2525]);
+  it("merges the live chapter with the baked archive index, offline", async () => {
+    // No archive mock: the baked index builds the back catalog with zero
+    // network, which is exactly what broke live (CDX timeouts in-app).
+    const fresh = loadExtension("site.truthnovelbeta.js");
+    const chapters = await fresh.parseChapterList(NOVEL_URL, mockCtx({ [NOVEL_URL]: ok(NOVEL_PAGE) }));
+    expect(chapters.length).toBeGreaterThan(1000);
+    expect(chapters[0].number).toBe(1);
+    expect(chapters[chapters.length - 1].number).toBe(2525);
     const live = chapters.find((c) => c.number === 2525);
     expect(live.url).toBe(READ_URL);
     expect(live.uploadedAt).toBe(Date.parse("2026-10-27T14:32:06.497Z"));
-    const arch = chapters.find((c) => c.number === 1);
-    expect(arch.url).toContain("web.archive.org");
-    expect(arch.title).toContain("1");
+    const arch = chapters.find((c) => c.number === 1000);
+    expect(arch.url).toContain("web.archive.org/web/20250115184928id_/");
+    expect(arch.url).toContain("truthnovel.top/1000-");
+    expect(arch.title).toContain("1000");
+    // List-only entries (no verified capture) fall back to a partial timestamp.
+    const untym = chapters.find((c) => c.number === 2);
+    expect(untym.url).toContain("web.archive.org/web/2026id_/");
+    // Numeric-only slugs (attachment junk like 4282-2) are excluded at build.
+    expect(chapters.map((c) => c.number)).not.toContain(4282);
   });
 
   it("parses live chapter content from #chapter-body", async () => {
@@ -193,17 +200,7 @@ describe("site:truthnovelbeta (Nexus live + Wayback fallback)", () => {
     expect(info.readersCount).toBe("1200");
   });
 
-  it("skips numeric-only archive slugs that are not chapters", async () => {
-    const cdx = JSON.stringify([
-      ["timestamp", "original", "statuscode"],
-      ["20260514081758", "https://truthnovel.top/4282-2/", "200"],
-      ["20250101000000", "https://truthnovel.top/1-عبقري/", "200"]
-    ]);
-    const fresh = loadExtension("site.truthnovelbeta.js");
-    const ctx = mockCtx({ [NOVEL_URL]: ok(NOVEL_PAGE), "web.archive.org/cdx": ok(cdx) });
-    const chapters = await fresh.parseChapterList(NOVEL_URL, ctx);
-    expect(chapters.map((c) => c.number)).toEqual([1, 2525]);
-  });
+
 
   it("scopes the unavailable-chapter check to the page title", async () => {
     const withTemplate = CHAPTER_PAGE.replace(

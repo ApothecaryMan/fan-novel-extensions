@@ -220,6 +220,15 @@ describe("site:truthnovelbeta (Nexus live + Wayback fallback)", () => {
     ).rejects.toThrow(/غير متوفر/);
   });
 
+  it("uses the hardcoded author even when the page carries no author markup", async () => {
+    const bare = NOVEL_PAGE.replace(/<span>\u0627\u0644\u0645\u0624\u0644\u0641:[^<]*<\/span>/, "<span></span>");
+    expect(bare).not.toContain("اسلام النجار");
+    const fresh = loadExtension("site.truthnovelbeta.js");
+    const ctx = mockCtx({ [NOVEL_URL]: ok(bare), "web.archive.org": ok(CDX_JSON) });
+    const info = await fresh.parseNovelInfo(NOVEL_URL, ctx);
+    expect(info.author).toBe("اسلام النجار");
+  });
+
   it("decodes entities and parses Arabic relative times", async () => {
     expect(ext._decodeEntities("a&rlm;b")).toBe("a\u200Fb");
     const now = Date.now();

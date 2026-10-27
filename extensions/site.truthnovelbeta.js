@@ -146,6 +146,7 @@ registerExtension({
   baseUrl: "https://truthnovel.top",
 
   _NOVEL_SLUG: "لورد-الحقيقة",
+  _AUTHOR: "اسلام النجار",
   _coverFallback: "https://truthnovel.top/media/covers/1eb35d9a-cb8d-4d7f-ae0e-51912e07b049.webp",
 
   _novelUrl: function () {
@@ -297,9 +298,7 @@ registerExtension({
       var tm = html.match(/<title>([\s\S]*?)<\/title>/i);
       title = tm ? self._decodeEntities(self._stripTags(tm[1])).split(/[·—|\-]/)[0].trim() : "لورد الحقيقة";
     }
-    var author = "";
-    var am = html.match(/المؤلف:\s*([^<>\n]+)/) || html.match(/بقلم\s+([^<>\n]+)/);
-    if (am) author = self._decodeEntities(self._stripTags(am[1])).trim();
+    var author = this._AUTHOR;
     var cover = self._meta(html, "og:image") || "";
     if (cover && cover.charAt(0) === "/") cover = self._absUrl(cover);
     if (!cover) cover = self._coverFallback;
@@ -433,7 +432,7 @@ registerExtension({
       source: this.id,
       url: this._novelUrl(),
       title: (parsed && parsed.title) || "لورد الحقيقة",
-      author: (parsed && parsed.author) || "اسلام النجار",
+      author: this._AUTHOR,
       coverUrl: (parsed && parsed.cover) || this._coverFallback,
       summary: (parsed && parsed.summary) || "لورد الحقيقة — رواية عربية على منصة Nexus Novels.",
       status: (parsed && parsed.status) || "مستمرة",
@@ -721,7 +720,7 @@ registerExtension({
       source: this.id,
       url: this._novelUrl(),
       title: (parsed && parsed.title) || "لورد الحقيقة",
-      author: (parsed && parsed.author) || "اسلام النجار",
+      author: this._AUTHOR,
       coverUrl: (parsed && parsed.cover) || this._coverFallback,
       category: "فانتازيا",
       status: (parsed && parsed.status) || "مستمرة"

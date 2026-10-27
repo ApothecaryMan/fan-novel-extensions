@@ -68,7 +68,7 @@ describe("site:truthnovelbeta (Nexus live + Wayback fallback)", () => {
     expect(ext.id).toBe("site:truthnovelbeta");
     expect(ext.name).toContain("Beta");
     expect(ext.lang).toBe("ar");
-    expect(ext.version).toBe("1.1.0");
+    expect(ext.version).toBe("1.3.0");
     expect(ext.apiVersion).toBe(2);
     expect(ext.baseUrl).toBe("https://truthnovel.top");
     const old = loadExtension("site.truthnovel.js");
@@ -164,11 +164,7 @@ describe("site:truthnovelbeta (Nexus live + Wayback fallback)", () => {
     expect(res.hasMore).toBe(false);
   });
 
-  it("refuses writes with a clear Arabic message (login-gated actions)", async () => {
-    const ctx = mockCtx();
-    await expect(ext.postComment(READ_URL, { author: "x", body: "hi" }, ctx)).rejects.toThrow(/الموقع/);
-    await expect(ext.voteComment(READ_URL, { commentId: "cm1", vote: 1 }, ctx)).rejects.toThrow(/الموقع/);
-  });
+
 
   it("getCommentVotes resolves empty without spending requests", async () => {
     const fresh = loadExtension("site.truthnovelbeta.js");
@@ -224,6 +220,104 @@ describe("site:truthnovelbeta (Nexus live + Wayback fallback)", () => {
     const ctx = mockCtx({ [NOVEL_URL]: ok(bare), "web.archive.org": ok(CDX_JSON) });
     const info = await fresh.parseNovelInfo(NOVEL_URL, ctx);
     expect(info.author).toBe("اسلام النجار");
+  });
+
+  it("declares the login contract the host wires up", () => {
+    expect(ext.auth).toMatchObject({ kind: "better-auth" });
+    expect(ext.auth.apiBaseUrl).toBe("https://truthnovel.top");
+  });
+
+  it("parses server action ids from the read page chunks", async () => {
+    const chunk = 'x.createServerReference)("402e3e18802513f03d977101a81da5de8ccc9f70b0",s.callServer,void 0,s.findSourceMapURL,"createCommentAction")'
+      + 'x.createServerReference)("409eb4d6a3f84360160b5bfd76b65146beb3bafd39",s.callServer,void 0,s.findSourceMapURL,"reactAction")';
+    const fresh = loadExtension("site.truthnovelbeta.js");
+    const ctx = mockCtx({
+      [READ_URL]: ok('<html><head></head><body><script src="/_next/static/chunks/abc123.js"></script></body></html>'),
+      "abc123.js": ok(chunk)
+    });
+    const ids = await fresh._nxActionIds(READ_URL, ctx);
+    expect(ids.create).toBe("402e3e18802513f03d977101a81da5de8ccc9f70b0");
+    expect(ids.react).toBe("409eb4d6a3f84360160b5bfd76b65146beb3bafd39");
+  });
+
+  it("refuses writes without a logged-in user id", async () => {
+    const fresh = loadExtension("site.truthnovelbeta.js");
+    const ctx = mockCtx();
+    await expect(fresh.postComment(READ_URL, { body: "hi" }, ctx)).rejects.toThrow(/truthnovel-auth-required/);
+    await expect(fresh.voteComment(READ_URL, { commentId: "cm1", vote: 1 }, ctx)).rejects.toThrow(/truthnovel-auth-required/);
+  });
+
+  it("posts via the create server action and returns the new id", async () => {
+    const chunk = 'createServerReference)("aaabbbcccddd11",s.callServer,void 0,s.findSourceMapURL,"createCommentAction")';
+    let seen = null;
+    const pageHtml = '<html><body><script>var x={"chapterId":"c1"};</script><script src="/_next/static/chunks/abc123.js"></script></body></html>';
+    const ctx = mockCtx({
+      [READ_URL]: (url, init) => {
+        if (init && init.method === "POST") {
+          seen = { url: url, headers: (init && init.headers) || {}, body: String((init && init.body) || "") };
+          return ok('0:{"ok":true,"id":"new1"}');
+        }
+        return ok(pageHtml);
+      },
+      "abc123.js": ok(chunk)
+    });
+    const fresh = loadExtension("site.truthnovelbeta.js");
+    const res = await fresh.postComment(READ_URL, { parentId: null, author: "x", body: "hi", siteUserId: "u1" }, ctx);
+    expect(res.ok).toBe(true);
+    expect(seen.headers["Next-Action"]).toBe("aaabbbcccddd11");
+    expect(seen.body).toContain("hi");
+  });
+
+  it("pages through every comment chunk until the cursor ends", async () => {
+    const page1 = CHAPTER_PAGE.replace('chapterId\\":\\"c1', 'chapterId\\":\\"chap9');
+    const chunk = 'createServerReference)("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",s.callServer,void 0,s.findSourceMapURL,"listCommentsAction")';
+    const page2text = '0:{"ok":true,"data":{"comments":[{"id":"cm9","parentId":null,"depth":0,"body":"اخير","status":"VISIBLE","createdAt":"2026-10-27T15:10:00.000Z","replyCount":0,"reactionCount":5,"reactions":{},"author":{"name":"z"},"replies":[]}],"nextCursor":null,"total":23}}';
+    const seen = [];
+    const ctx = mockCtx({
+      [READ_URL]: (url, init) => {
+        if (init && init.method === "POST") {
+          seen.push(JSON.parse(String(init.body))[0]);
+          return ok(page2text);
+        }
+        return ok('<html><body><script>var x={\\"chapterId\\":\\"chap9\\"};</script><script src="/_next/static/chunks/pg1.js"></script>' + page1.slice(page1.indexOf("<script>self")) + '</body></html>');
+      },
+      "pg1.js": ok(chunk)
+    });
+    const fresh = loadExtension("site.truthnovelbeta.js");
+    const res = await fresh.getComments(READ_URL, ctx);
+    expect(res.count).toBe(23);
+    expect(res.comments.map((c) => c.id)).toEqual(["cm1", "cm2", "cm9"]);
+    expect(res.comments[2].likes).toBe(5);
+    expect(seen[0]).toMatchObject({ chapterId: "chap9", sort: "top" });
+  });
+
+  it("keeps the embedded page when follow-up chunks fail", async () => {
+    const chunk = 'createServerReference)("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",s.callServer,void 0,s.findSourceMapURL,"listCommentsAction")';
+    const ctx = mockCtx({
+      [READ_URL]: (url, init) => {
+        if (init && init.method === "POST") return { ok: false, status: 500, text: "" };
+        return ok('<html><body><script>var x={\\"chapterId\\":\\"chap9\\"};</script><script src="/_next/static/chunks/pg1.js"></script>' + CHAPTER_PAGE.slice(CHAPTER_PAGE.indexOf("<script>self")) + '</body></html>');
+      },
+      "pg1.js": ok(chunk)
+    });
+    const fresh = loadExtension("site.truthnovelbeta.js");
+    const res = await fresh.getComments(READ_URL, ctx);
+    expect(res.count).toBe(23);
+    expect(res.comments).toHaveLength(2);
+  });
+
+  it("maps 401/403 to auth-expired so the app reopens login", async () => {
+    const chunk = 'createServerReference)("eeefff00011122",s.callServer,void 0,s.findSourceMapURL,"reactAction")';
+    const ctx = mockCtx({
+      [READ_URL]: (url, init) => {
+        if (init && init.method === "POST") return { ok: false, status: 401, text: "" };
+        return ok('<html><body><script src="/_next/static/chunks/abc123.js"></script></body></html>');
+      },
+      "abc123.js": ok(chunk)
+    });
+    const fresh = loadExtension("site.truthnovelbeta.js");
+    await expect(fresh.voteComment(READ_URL, { commentId: "cm1", vote: 1, siteUserId: "u1" }, ctx))
+      .rejects.toThrow(/truthnovel-auth-expired/);
   });
 
   it("decodes entities and parses Arabic relative times", async () => {

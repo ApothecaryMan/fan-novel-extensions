@@ -19,7 +19,7 @@
 // @id site:truthnovelbeta
 // @name Truth Novel Beta
 // @lang ar
-// @version 1.1.0
+// @version 1.3.0
 // @apiVersion 2
 // @baseUrl https://truthnovel.top
 
@@ -141,9 +141,21 @@ registerExtension({
   id: "site:truthnovelbeta",
   name: "Truth Novel Beta",
   lang: "ar",
-  version: "1.1.0",
+  version: "1.3.0",
   apiVersion: 2,
   baseUrl: "https://truthnovel.top",
+
+  // Login contract for the host (same shape as the kolnovel auth block:
+  // the host discovers this after install and wires the login sheet,
+  // session storage, and credential injection — the sandbox never sees
+  // passwords). Nexus signs in via Better Auth (email + password) and
+  // keeps a session cookie the host cookie-jar replays on xFetch.
+  auth: {
+    kind: "better-auth",
+    apiBaseUrl: "https://truthnovel.top",
+    loginPath: "/login",
+    registerPath: "/register"
+  },
 
   _NOVEL_SLUG: "لورد-الحقيقة",
   _AUTHOR: "اسلام النجار",
@@ -614,9 +626,39 @@ registerExtension({
     var page;
     try { page = JSON.parse(raw); } catch (e) { return { count: 0, comments: [] }; }
     var flat = this._flattenInitial(page.comments, fullUrl, []);
-    flat.sort(function (a, b) { return a.createdAt - b.createdAt; });
     var total = (typeof page.total === "number" && page.total >= 0) ? page.total : flat.length;
-    return { count: total, comments: flat };
+    // The embedded page is only the first chunk (nextCursor != null means
+    // more). Follow the cursor chain exactly like the site client does:
+    // same chapterId, same "top" sort, until nextCursor comes back null.
+    // Any failure keeps the embedded page instead of failing the drawer.
+    try {
+      var chapterId = this._nxChapterId(html);
+      var ids = null;
+      try { ids = await this._nxActionIds(fullUrl, ctx); } catch (e) { ids = null; }
+      var cursor = (page && typeof page.nextCursor !== "undefined") ? page.nextCursor : null;
+      if (chapterId && ids && ids.list && cursor !== null) {
+        var guard = 0;
+        while (cursor !== null && guard++ < 50) {
+          var pr = await this._nxCall(fullUrl, ids.list,
+            { chapterId: chapterId, sort: "top", cursor: cursor }, ctx, "فشل جلب باقي التعليقات");
+          var pd = (pr && pr.data) ? pr.data : {};
+          this._flattenInitial(pd.comments || [], fullUrl, flat);
+          if (typeof pd.total === "number" && pd.total >= 0) total = pd.total;
+          cursor = (typeof pd.nextCursor === "undefined") ? null : pd.nextCursor;
+        }
+      }
+    } catch (e) { /* keep the embedded page */ }
+    var seenIds = {};
+    var dedup = [];
+    for (var di = 0; di < flat.length; di++) {
+      var cid = String(flat[di].id);
+      if (seenIds[cid]) continue;
+      seenIds[cid] = true;
+      dedup.push(flat[di]);
+    }
+    dedup.sort(function (a, b) { return a.createdAt - b.createdAt; });
+    if (!total) total = dedup.length;
+    return { count: total, comments: dedup };
   },
 
   getCommentCount: async function (chapterUrl, ctx) {
@@ -694,13 +736,175 @@ registerExtension({
     return { authorName: name, totalComments: total, totalLikes: null, comments: comments, hasMore: false };
   },
 
-  /** New-site commenting is login-gated: read from the app, write on the site. */
+  // ---------------------------------------------------------------
+  // Authenticated writes via the site's own Next.js Server Actions.
+  //
+  // Verified live (Oct 2026): POSTing the chapter URL with a `Next-Action`
+  // header and a JSON-arg body reaches the action; without a session the
+  // site answers {"ok":false,"error":{"code":"UNAUTHENTICATED",...}} and
+  // creates nothing. So the channel is proven and login is the only gate:
+  // the host must sign in (Better Auth email+password, cookie session
+  // replayed by its cookie jar) and hand the user id in as siteUserId,
+  // exactly like the kolnovel auth block. Missing id / 401 / UNAUTHENTICATED
+  // surface as stable `truthnovel-auth-*` errors the app matches to reopen
+  // login. Action ids rotate per site deploy and are re-parsed every time
+  // (cached per session), so a redeploy cannot strand a hardcoded id.
+  // ---------------------------------------------------------------
+  _nxActionCache: {},
+
+  /** create/react/list Server Action ids parsed out of the page chunks. */
+  _nxActionIds: async function (readUrl, ctx) {
+    var key = this._normKey(readUrl);
+    if (this._nxActionCache[key]) return this._nxActionCache[key];
+    var pageRes = await _fetchCachedPage(readUrl, ctx);
+    if (!pageRes || !pageRes.ok || !pageRes.text) throw new Error("فشل فتح صفحة الفصل");
+    var html = pageRes.text;
+    var found = {};
+    var chunkRe = /src="(\/_next\/static\/chunks\/[^"]+\.js)"/g;
+    var cm;
+    while ((cm = chunkRe.exec(html)) !== null) {
+      var curl = this._absUrl(cm[1]);
+      var cres;
+      try { cres = await _fetchCachedPage(curl, ctx); }
+      catch (e) { continue; }
+      if (!cres || !cres.ok || !cres.text) continue;
+      var names = ["createCommentAction", "reactAction", "listCommentsAction"];
+      for (var i = 0; i < names.length; i++) {
+        if (found[names[i]]) continue;
+        var am = cres.text.match(new RegExp("createServerReference\\)?\\(\"([0-9a-f]{10,})\"[^)]*\"" + names[i] + "\""));
+        if (am) found[names[i]] = am[1];
+      }
+      if (found.createCommentAction && found.reactAction) break;
+    }
+    var ids = { create: found.createCommentAction || "", react: found.reactAction || "", list: found.listCommentsAction || "" };
+    this._nxActionCache[key] = ids;
+    return ids;
+  },
+
+  _normKey: function (url) {
+    return String(url || "").split("#")[0].split("?")[0].replace(/\/+$/, "").toLowerCase();
+  },
+
+  /** Nexus chapter id (e.g. cmvqsb...) the actions address chapters by. */
+  _nxChapterId: function (html) {
+    var m = String(html || "").match(/\\"chapterId\\":\\"([^"\\]+)\\"/)
+      || String(html || "").match(/"chapterId":"([^"]+)"/);
+    return m ? m[1] : "";
+  },
+
+  _nxSiteUserId: function (input) {
+    var id = input && (input.siteUserId || input.authUserId);
+    id = id ? String(id).trim() : "";
+    if (!id) throw new Error("truthnovel-auth-required: سجّل الدخول على truthnovel.top للمشاركة");
+    return id;
+  },
+
+  _nxAuthError: function (res, parsed, label) {
+    var code = parsed && parsed.error && parsed.error.code;
+    if (code === "UNAUTHENTICATED" || res.status === 401 || res.status === 403) {
+      throw new Error("truthnovel-auth-expired: انتهت الجلسة، سجّل الدخول مجددا");
+    }
+    var msg = (parsed && parsed.error && parsed.error.message) || (label + ": " + res.status);
+    throw new Error(msg);
+  },
+
+  /** One Server Action call; returns the parsed {ok,...} envelope. */
+  _nxCall: async function (readUrl, actionId, args, ctx, label) {
+    var res = await ctx.xFetch(readUrl, {
+      method: "POST",
+      headers: { "Next-Action": actionId, "Content-Type": "application/json", "Accept": "text/x-component" },
+      body: JSON.stringify([args])
+    });
+    if (!res) throw new Error(label + ": network");
+    var parsed = null;
+    var fallback = null;
+    var text = res.text || "";
+    var lines = text.split("\n");
+    for (var i = 0; i < lines.length; i++) {
+      var ln = lines[i].replace(/^[0-9a-zA-Z]+:/, "");
+      if (ln.charAt(0) !== "{" && ln.charAt(0) !== "[") continue;
+      try {
+        var cand = JSON.parse(ln);
+        if (!cand || typeof cand !== "object") continue;
+        if (typeof cand.ok !== "undefined" || cand.error || typeof cand.success !== "undefined") { parsed = cand; break; }
+        if (cand.id || cand.commentId || cand.comment_id) fallback = cand;
+        else if (!fallback) fallback = cand;
+      } catch (e) { /* not JSON */ }
+    }
+    if (!parsed) parsed = fallback;
+    if (!res.ok && !parsed) this._nxAuthError(res, parsed, label);
+    if (!parsed) throw new Error(label + ": " + res.status);
+    if (parsed.ok === false || parsed.success === false) this._nxAuthError(res, parsed, label);
+    return parsed;
+  },
+
+  _nxBustChapter: function (readUrl) {
+    for (var k in _htmlCache) {
+      if (this._normKey(k) === this._normKey(readUrl)) {
+        _CACHE_BYTES -= _htmlCache[k].text.length;
+        delete _htmlCache[k];
+      }
+    }
+    for (var u in _inflight) {
+      if (this._normKey(u) === this._normKey(readUrl)) delete _inflight[u];
+    }
+  },
+
   postComment: async function (chapterUrl, input, ctx) {
-    throw new Error("التفاعل من التطبيق غير مدعوم بعد تحديث الموقع — سجّل الدخول على truthnovel.top للمشاركة");
+    this._nxSiteUserId(input);
+    var body = input && input.body ? String(input.body).trim() : "";
+    if (!body) throw new Error("نص التعليق فارغ");
+    if (body.length > 2000) throw new Error("التعليق طويل (2000 حرف كحد أقصى)");
+    var fullUrl = this._isArchiveUrl(chapterUrl) ? String(chapterUrl) : this._absUrl(chapterUrl);
+    if (this._isArchiveUrl(chapterUrl)) throw new Error("الأرشيف للقراءة فقط — علّق على الفصل في الموقع الحالي");
+    var pageRes = await _fetchCachedPage(fullUrl, ctx);
+    if (!pageRes || !pageRes.ok || !pageRes.text) throw new Error("فشل فتح صفحة الفصل");
+    var chapterId = this._nxChapterId(pageRes.text);
+    if (!chapterId) throw new Error("تعذر تحديد الفصل");
+    var ids = await this._nxActionIds(fullUrl, ctx);
+    if (!ids.create) throw new Error("تعذر تجهيز التعليقات (تحديث الموقع؟)");
+    var parentRaw = input && input.parentId ? String(input.parentId).trim() : "";
+    var created = await this._nxCall(fullUrl, ids.create, {
+      chapterId: chapterId, parentId: parentRaw || null, body: body
+    }, ctx, "فشل نشر التعليق");
+    this._nxBustChapter(fullUrl);
+    var d = created && created.data ? created.data : created;
+    var newId = d && (d.id || d.commentId || d.comment_id);
+    return { ok: true, id: newId ? String(newId) : undefined };
   },
 
   voteComment: async function (chapterUrl, input, ctx) {
-    throw new Error("التفاعل من التطبيق غير مدعوم بعد تحديث الموقع — سجّل الدخول على truthnovel.top للمشاركة");
+    this._nxSiteUserId(input);
+    var cid = input && input.commentId ? String(input.commentId).trim() : "";
+    if (!cid) throw new Error("تعذر تحديد التعليق");
+    var vote = input && input.vote === -1 ? -1 : 1;
+    if (vote === -1) throw new Error("التصويت السلبي غير مدعوم على الموقع الجديد");
+    var fullUrl = this._isArchiveUrl(chapterUrl) ? String(chapterUrl) : this._absUrl(chapterUrl);
+    if (this._isArchiveUrl(chapterUrl)) throw new Error("الأرشيف للقراءة فقط");
+    var ids = await this._nxActionIds(fullUrl, ctx);
+    if (!ids.react) throw new Error("تعذر تجهيز التصويت (تحديث الموقع؟)");
+    var out = await this._nxCall(fullUrl, ids.react, { commentId: cid, type: "LIKE" }, ctx, "فشل التصويت");
+    var d = out && out.data ? out.data : out;
+    var likes = undefined;
+    if (d) {
+      if (typeof d.likeCount === "number") likes = d.likeCount;
+      else if (typeof d.likes === "number") likes = d.likes;
+      else if (typeof d.reactionCount === "number") likes = d.reactionCount;
+    }
+    var liked = true;
+    if (d && typeof d.liked !== "undefined") liked = !!d.liked;
+    else if (d && typeof d.myReaction !== "undefined") liked = !!d.myReaction;
+    if (typeof likes !== "number") {
+      try {
+        this._nxBustChapter(fullUrl);
+        var fresh = await this.getComments(fullUrl, ctx);
+        for (var i = 0; i < fresh.comments.length; i++) {
+          if (String(fresh.comments[i].id) === String(cid)) { likes = fresh.comments[i].likes; break; }
+        }
+      } catch (e) { /* keep unknown */ }
+    }
+    if (typeof likes !== "number" || likes < 0) likes = 0;
+    return { ok: true, likes: likes, liked: liked };
   },
 
   getCommentVotes: async function (chapterUrl, commentIds, ctx) {
